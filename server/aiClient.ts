@@ -108,8 +108,10 @@ function buildLogContextSnapshot(
     (l) => `- ${l.service}: ${l.status}${l.expiresAt ? ` (expira ${l.expiresAt})` : ''}`
   );
 
+  const vendorTitle = overview.vendor === 'fortigate' ? 'FORTIGATE (FORTIOS)' : 'SONICWALL (SONICOS)';
+
   return [
-    `=== CONTEXTO ATUAL DO AMBIENTE SONICWALL ===`,
+    `=== CONTEXTO ATUAL DO AMBIENTE ${vendorTitle} ===`,
     ...(overview.activeSite
       ? [
           `Localidade Gerenciada: ${overview.activeSite.name}${overview.activeSite.location ? ` (${overview.activeSite.location})` : ''}`,
@@ -119,7 +121,7 @@ function buildLogContextSnapshot(
     ...(healthParts.length > 0 ? [`Saúde e Hardware: ${healthParts.join(' | ')}`] : []),
     `Total de syslogs na janela (${overview.retention.retentionDays} dias): ${overview.totalSyslogs} (Permitidos: ${overview.syslogBreakdown.allow}, Bloqueados: ${overview.syslogBreakdown.blocked}, Sistema: ${overview.syslogBreakdown.system}, Críticos/Erro: ${overview.syslogBreakdown.criticalAndError})`,
     `Resumo Regras Firewall: total=${overview.rulesSummary.total}, ativas=${overview.rulesSummary.active}, sem_uso=${overview.rulesSummary.unused}, sombreadas=${overview.rulesSummary.shadowed}, desabilitadas=${overview.rulesSummary.disabled}, permissivas=${overview.rulesSummary.overpermissive}`,
-    `Resumo Políticas NAT: total=${overview.natsSummary.total}, ativas=${overview.natsSummary.active}, sem_uso=${overview.natsSummary.unused}, órfãs=${overview.natsSummary.orphaned}, desabilitadas=${overview.natsSummary.disabled}`,
+    `Resumo Políticas NAT/VIP: total=${overview.natsSummary.total}, ativas=${overview.natsSummary.active}, sem_uso=${overview.natsSummary.unused}, órfãs=${overview.natsSummary.orphaned}, desabilitadas=${overview.natsSummary.disabled}`,
     `Top IPs Bloqueados: ${topBlocked || 'Nenhum'}`,
     `Top Portas Visadas: ${topPorts || 'Nenhuma'}`,
     ...(ifaceLines.length > 0 ? [``, `Interfaces e Consumo de Link:`, ...ifaceLines] : []),
@@ -129,7 +131,7 @@ function buildLogContextSnapshot(
     `Regras de Firewall Irregulares / Sem Uso:`,
     flaggedRules.length > 0 ? flaggedRules.join('\n') : '(Nenhuma regra irregular carregada)',
     ``,
-    `Políticas NAT Irregulares / Sem Uso:`,
+    `Políticas NAT / VIP Irregulares / Sem Uso:`,
     flaggedNats.length > 0 ? flaggedNats.join('\n') : '(Nenhuma política NAT irregular carregada)',
     ``,
     `Amostra de Eventos de Syslog (priorizando alertas e bloqueios):`,
@@ -139,12 +141,12 @@ function buildLogContextSnapshot(
 
 function buildSystemInstruction(contextSnapshot: string): string {
   return [
-    `Você é um Engenheiro Sênior de Segurança de Redes especialista em firewalls SonicWall (SonicOS 6.5 / 7), análise de syslogs, políticas NAT e ambientes Linux.`,
-    `Seu objetivo é traduzir os logs técnicos, drops, alertas de IPS/AV, regras sem uso e NATs em explicações claras, humanas, objetivas e acionáveis em português brasileiro.`,
+    `Você é um Engenheiro Sênior de Segurança de Redes especialista em firewalls SonicWall (SonicOS 6.5 / 7) e Fortinet FortiGate (FortiOS 7.x), análise de syslogs, políticas NAT/VIP e ambientes Linux.`,
+    `Seu objetivo é traduzir os logs técnicos, drops, alertas de IPS/AV, regras sem uso e NATs/VIPs em explicações claras, humanas, objetivas e acionáveis em português brasileiro.`,
     `Diretrizes obrigatórias:`,
     `1. Baseie-se exclusivamente nos dados reais fornecidos no contexto abaixo e nas mensagens do usuário. Nunca invente IPs, portas ou regras que não apareçam nos dados.`,
-    `2. Se não houver logs ou regras carregados, informe claramente e oriente o usuário a carregar a amostra TZ470 ou importar/conectar seu SonicWall.`,
-    `3. Ao explicar um evento ou risco, destaque: (a) o que aconteceu em linguagem simples, (b) se é tráfego normal ou ameaça/erro real, (c) qual ação prática tomar (ex.: desabilitar regra antes de excluir, bloquear IP, revisar NAT órfão).`,
+    `2. Se não houver logs ou regras carregados, informe claramente e oriente o usuário a carregar o dataset de amostra ou sincronizar/conectar o firewall.`,
+    `3. Ao explicar um evento ou risco, destaque: (a) o que aconteceu em linguagem simples, (b) se é tráfego normal ou ameaça/erro real, (c) qual ação prática tomar (ex.: desabilitar política antes de excluir, bloquear IP, revisar VIP/NAT órfão).`,
     `4. Seja direto, organizado com listas curtas e cite os identificadores exatos (IPs, portas, IDs de regra/NAT) quando presentes.`,
     ``,
     contextSnapshot,

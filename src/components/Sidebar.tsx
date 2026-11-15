@@ -12,9 +12,12 @@ import {
   ShieldAlert,
   Terminal,
 } from 'lucide-react';
-import type { ActiveSection, AuditOverview } from '../types.ts';
+import type { ActiveSection, AuditOverview, FirewallVendor } from '../types.ts';
+import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
 
 interface SidebarProps {
+  vendor: FirewallVendor;
+  onSelectVendor: (vendor: FirewallVendor) => void;
   activeSection: ActiveSection;
   onSelectSection: (section: ActiveSection) => void;
   overview: AuditOverview | null;
@@ -25,6 +28,8 @@ interface SidebarProps {
 }
 
 export function Sidebar({
+  vendor,
+  onSelectVendor,
   activeSection,
   onSelectSection,
   overview,
@@ -33,6 +38,8 @@ export function Sidebar({
   onOpenPasswordModal,
   onLogout,
 }: SidebarProps) {
+  const theme = VENDOR_THEMES[vendor];
+
   const unusedRulesCount =
     (overview?.rulesSummary.unused ?? 0) +
     (overview?.rulesSummary.shadowed ?? 0) +
@@ -71,7 +78,7 @@ export function Sidebar({
     },
     {
       id: 'nats',
-      label: 'NATs Sem Uso',
+      label: vendor === 'fortigate' ? 'VIPs & NATs Sem Uso' : 'NATs Sem Uso',
       icon: ArrowLeftRight,
       count: unusedNatsCount || undefined,
     },
@@ -86,27 +93,85 @@ export function Sidebar({
   const activeSite = overview?.activeSite;
 
   return (
-    <aside className="w-64 shrink-0 border-r border-[#D4E4D8] bg-[#EDF5EF] flex flex-col justify-between min-h-screen">
+    <aside className="w-64 shrink-0 border-r border-[var(--fw-border)] bg-[var(--fw-surface)] flex flex-col justify-between min-h-screen transition-colors">
       <div>
-        <div className="px-5 h-16 flex items-center gap-2.5 border-b border-[#D4E4D8]">
-          <Terminal className="w-5 h-5 text-[#1E4D3B] shrink-0" aria-hidden="true" />
-          <span className="text-base font-bold tracking-tight text-[#123325] whitespace-nowrap">
-            SonicAudit
-          </span>
+        <div className="px-5 h-16 flex items-center justify-between gap-2 border-b border-[var(--fw-border)]">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <Terminal className="w-5 h-5 text-[var(--fw-accent)] shrink-0" aria-hidden="true" />
+            <div className="min-w-0">
+              <span className="text-base font-bold tracking-tight text-[var(--fw-heading)] whitespace-nowrap block leading-none">
+                FW Audit
+              </span>
+              <span className="text-[10px] font-medium text-[var(--fw-text-muted)] block mt-0.5 truncate">
+                {theme.label} · {theme.platformSubtitle}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Seletor de Ambiente / Vendor (Azul Pastel vs Vermelho Pastel) */}
+        <div className="p-3 border-b border-[var(--fw-border)] bg-[var(--fw-surface-alt)] space-y-1.5">
+          <p className="text-[11px] font-medium text-[var(--fw-text-muted)]">
+            Ambiente do Firewall
+          </p>
+          <div
+            className="grid grid-cols-2 gap-1 p-1 bg-white border border-[var(--fw-border-strong)] rounded-md"
+            role="tablist"
+            aria-label="Selecionar fabricante do firewall"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={vendor === 'sonicwall'}
+              onClick={() => onSelectVendor('sonicwall')}
+              className={`flex items-center justify-center gap-1.5 py-1.5 px-2 text-xs font-semibold rounded transition-colors ${
+                vendor === 'sonicwall'
+                  ? 'bg-[#1D4E89] text-white'
+                  : 'text-[#1A365D] hover:bg-[#E9F0FA]'
+              }`}
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  vendor === 'sonicwall' ? 'bg-[#C3D9F5]' : 'bg-[#2B6CB0]'
+                }`}
+                aria-hidden="true"
+              />
+              SonicWall
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={vendor === 'fortigate'}
+              onClick={() => onSelectVendor('fortigate')}
+              className={`flex items-center justify-center gap-1.5 py-1.5 px-2 text-xs font-semibold rounded transition-colors ${
+                vendor === 'fortigate'
+                  ? 'bg-[#9B2C2C] text-white'
+                  : 'text-[#4A1818] hover:bg-[#F9EAEA]'
+              }`}
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  vendor === 'fortigate' ? 'bg-[#F8D0D0]' : 'bg-[#C53030]'
+                }`}
+                aria-hidden="true"
+              />
+              FortiGate
+            </button>
+          </div>
         </div>
 
         {sites.length > 0 && activeSite && (
-          <div className="p-3 border-b border-[#D4E4D8] bg-[#E5F0E8] space-y-2">
-            <div className="flex items-center justify-between text-[11px] font-medium text-[#395B4A]">
+          <div className="p-3 border-b border-[var(--fw-border)] bg-[var(--fw-surface-soft)] space-y-2">
+            <div className="flex items-center justify-between text-[11px] font-medium text-[var(--fw-text-muted)]">
               <span className="inline-flex items-center gap-1">
-                <Building2 className="w-3.5 h-3.5 text-[#1E4D3B]" />
+                <Building2 className="w-3.5 h-3.5 text-[var(--fw-accent)]" />
                 Localidade Ativa ({sites.length})
               </span>
               <button
                 type="button"
                 onClick={() => onSelectSection('connect')}
                 title="Gerenciar localidades e firewalls"
-                className="inline-flex items-center gap-0.5 text-[#1E4D3B] hover:underline"
+                className="inline-flex items-center gap-0.5 text-[var(--fw-accent)] hover:underline"
               >
                 <Plus className="w-3 h-3" />
                 Gerenciar
@@ -116,7 +181,7 @@ export function Sidebar({
               aria-label="Selecionar localidade do firewall"
               value={activeSite.id}
               onChange={(e) => onSelectSite(e.target.value)}
-              className="w-full px-2.5 py-1.5 text-xs font-medium text-[#123325] bg-white border border-[#BFD5C5] rounded-md focus:outline-none focus:ring-2 focus:ring-[#2A6B52]"
+              className="w-full px-2.5 py-1.5 text-xs font-medium text-[var(--fw-heading)] bg-white border border-[var(--fw-border-strong)] rounded-md focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
             >
               {sites.map((site) => (
                 <option key={site.id} value={site.id}>
@@ -138,10 +203,10 @@ export function Sidebar({
                 key={item.id}
                 type="button"
                 onClick={() => onSelectSection(item.id)}
-                className={`w-full flex items-center justify-between px-3 py-2.5 text-sm font-medium rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2A6B52] ${
+                className={`w-full flex items-center justify-between px-3 py-2.5 text-sm font-medium rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--fw-accent-mid)] ${
                   isActive
-                    ? 'bg-[#1E4D3B] text-white'
-                    : 'text-[#2C4B3D] hover:bg-[#DFECE3] hover:text-[#123325]'
+                    ? 'bg-[var(--fw-accent)] text-white'
+                    : 'text-[var(--fw-text-body)] hover:bg-[var(--fw-surface-alt)] hover:text-[var(--fw-heading)]'
                 }`}
               >
                 <span className="flex items-center gap-2.5 min-w-0">
@@ -151,7 +216,7 @@ export function Sidebar({
                 {item.count !== undefined && (
                   <span
                     className={`font-mono text-xs tabular-nums ${
-                      isActive ? 'text-[#C6DED0]' : 'text-[#4B6B5C]'
+                      isActive ? 'text-[var(--fw-accent-on-dark)]' : 'text-[var(--fw-text-muted)]'
                     }`}
                   >
                     {item.count.toLocaleString('pt-BR')}
@@ -163,40 +228,49 @@ export function Sidebar({
         </nav>
       </div>
 
-      <div className="p-4 border-t border-[#D4E4D8] space-y-2.5 text-xs text-[#456354]">
+      <div className="p-4 border-t border-[var(--fw-border)] space-y-2.5 text-xs text-[var(--fw-text-muted)]">
         <div>
-          <p className="font-medium text-[#123325] truncate">
-            {overview?.appliance.model || 'Sem appliance'}
+          <p className="font-medium text-[var(--fw-heading)] truncate">
+            {overview?.appliance.model || `Sem appliance ${theme.label}`}
           </p>
-          <p className="text-[#4B6B5C] truncate mt-0.5">
+          <p className="text-[var(--fw-text-subtle)] truncate mt-0.5">
             {overview?.appliance.host && overview.appliance.host !== '-'
               ? `${overview.appliance.host} · ${overview.appliance.firmware}`
-              : 'Conecte via API ou importe .exp'}
+              : vendor === 'fortigate'
+                ? 'Conecte via FortiOS API ou Syslog'
+                : 'Conecte via API ou importe .exp'}
           </p>
         </div>
 
-        <div className="pt-2 border-t border-[#D4E4D8] flex items-center justify-between">
+        <div className="pt-2 border-t border-[var(--fw-border)] flex items-center justify-between">
           <span>Retenção logs</span>
-          <span className="font-mono text-[#123325] tabular-nums">{retentionDays} dias</span>
+          <span className="font-mono text-[var(--fw-heading)] tabular-nums">
+            {retentionDays} dias
+          </span>
         </div>
 
         <div className="flex items-center justify-between">
           <span>Receptor UDP</span>
           {udpRunning ? (
-            <span className="flex items-center gap-1.5 font-mono text-[#1E4D3B] font-medium tabular-nums">
-              <span className="w-2 h-2 rounded-full bg-[#2A6B52]" aria-hidden="true" />
+            <span className="flex items-center gap-1.5 font-mono text-[var(--fw-accent)] font-medium tabular-nums">
+              <span
+                className="w-2 h-2 rounded-full bg-[var(--fw-accent-mid)]"
+                aria-hidden="true"
+              />
               :{overview?.udpStatus.port}
             </span>
           ) : (
-            <span className="text-[#4B6B5C] font-mono">Parado</span>
+            <span className="text-[var(--fw-text-subtle)] font-mono">
+              Parado (:{theme.defaultUdpPort})
+            </span>
           )}
         </div>
 
         {authUsername && (
-          <div className="pt-2.5 border-t border-[#D4E4D8] space-y-2">
+          <div className="pt-2.5 border-t border-[var(--fw-border)] space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-[#4B6B5C]">Operador</span>
-              <span className="font-mono font-medium text-[#123325] truncate max-w-[120px]">
+              <span className="text-[var(--fw-text-subtle)]">Operador</span>
+              <span className="font-mono font-medium text-[var(--fw-heading)] truncate max-w-[120px]">
                 {authUsername}
               </span>
             </div>
@@ -204,7 +278,7 @@ export function Sidebar({
               <button
                 type="button"
                 onClick={onOpenPasswordModal}
-                className="inline-flex items-center justify-center gap-1 px-2 py-1.5 text-[11px] font-medium text-[#1D3B2E] bg-white border border-[#BFD5C5] rounded hover:bg-[#F4F8F5]"
+                className="inline-flex items-center justify-center gap-1 px-2 py-1.5 text-[11px] font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded hover:bg-[var(--fw-bg)]"
               >
                 <KeyRound className="w-3 h-3" />
                 Senha
@@ -212,7 +286,7 @@ export function Sidebar({
               <button
                 type="button"
                 onClick={onLogout}
-                className="inline-flex items-center justify-center gap-1 px-2 py-1.5 text-[11px] font-medium text-red-700 bg-white border border-[#E4B8B8] rounded hover:bg-red-50"
+                className="inline-flex items-center justify-center gap-1 px-2 py-1.5 text-[11px] font-medium text-red-700 bg-white border border-red-200 rounded hover:bg-red-50"
               >
                 <LogOut className="w-3 h-3" />
                 Sair

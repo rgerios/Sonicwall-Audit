@@ -8,17 +8,21 @@ import {
   ShieldAlert,
   TerminalSquare,
 } from 'lucide-react';
-import type { FirewallRule } from '../types.ts';
+import type { FirewallRule, FirewallVendor } from '../types.ts';
+import { vendorApiUrl } from '../utils/vendorApi.ts';
+import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
 import { CliScriptModal } from './CliScriptModal.tsx';
 
 interface UnusedRulesViewProps {
+  vendor: FirewallVendor;
   refreshToken: number;
   onGoToConnect: () => void;
 }
 
 type RuleFilter = 'flagged' | 'all' | 'unused' | 'shadowed' | 'disabled' | 'overpermissive';
 
-export function UnusedRulesView({ refreshToken, onGoToConnect }: UnusedRulesViewProps) {
+export function UnusedRulesView({ vendor, refreshToken, onGoToConnect }: UnusedRulesViewProps) {
+  const theme = VENDOR_THEMES[vendor];
   const [rules, setRules] = useState<FirewallRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<RuleFilter>('flagged');
@@ -31,10 +35,15 @@ export function UnusedRulesView({ refreshToken, onGoToConnect }: UnusedRulesView
   } | null>(null);
 
   useEffect(() => {
+    setSelectedIds([]);
+    setCliModal(null);
+  }, [vendor]);
+
+  useEffect(() => {
     const load = async () => {
       setLoading(true);
       try {
-        const res = await fetch('/api/rules');
+        const res = await fetch(vendorApiUrl(vendor, '/rules'));
         if (res.ok) {
           const data = await res.json();
           setRules(data.rules || []);
@@ -44,7 +53,7 @@ export function UnusedRulesView({ refreshToken, onGoToConnect }: UnusedRulesView
       }
     };
     void load();
-  }, [refreshToken]);
+  }, [vendor, refreshToken]);
 
   const filteredRules = useMemo(() => {
     return rules.filter((r) => {
@@ -79,7 +88,7 @@ export function UnusedRulesView({ refreshToken, onGoToConnect }: UnusedRulesView
   const openCliGenerator = async (mode: 'disable' | 'delete', targetIds?: string[]) => {
     const ids = targetIds ?? selectedIds;
     if (ids.length === 0) return;
-    const res = await fetch('/api/export/cli', {
+    const res = await fetch(vendorApiUrl(vendor, '/export/cli'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ruleIds: ids, natIds: [], mode }),
@@ -124,7 +133,7 @@ export function UnusedRulesView({ refreshToken, onGoToConnect }: UnusedRulesView
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'sonicwall-regras-auditoria.csv';
+    a.download = `${vendor}-regras-auditoria.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -145,7 +154,7 @@ export function UnusedRulesView({ refreshToken, onGoToConnect }: UnusedRulesView
         );
       case 'disabled':
         return (
-          <span className="inline-flex items-center gap-1.5 text-[#5C7A6B] font-medium whitespace-nowrap">
+          <span className="inline-flex items-center gap-1.5 text-[var(--fw-text-subtle)] font-medium whitespace-nowrap">
             Desabilitada
           </span>
         );
@@ -166,19 +175,29 @@ export function UnusedRulesView({ refreshToken, onGoToConnect }: UnusedRulesView
 
   if (!loading && rules.length === 0) {
     return (
-      <div className="bg-white border border-[#D4E4D8] rounded-lg p-10 max-w-2xl">
-        <h2 className="text-lg font-semibold text-[#123325]">
-          Nenhuma regra de firewall carregada
+      <div className="bg-white border border-[var(--fw-border)] rounded-lg p-10 max-w-2xl">
+        <h2 className="text-lg font-semibold text-[var(--fw-heading)]">
+          Nenhuma regra {theme.label} carregada
         </h2>
-        <p className="text-xs text-[#456354] mt-2 leading-relaxed">
-          Conecte-se à API SonicOS do seu firewall ou importe um arquivo de configuração{' '}
-          <span className="font-mono">.exp</span> / <span className="font-mono">.json</span> para
-          identificar regras com zero acertos, regras desabilitadas e regras sombreadas.
+        <p className="text-xs text-[var(--fw-text-muted)] mt-2 leading-relaxed">
+          {vendor === 'fortigate' ? (
+            <>
+              Conecte-se à API REST do FortiOS usando token Bearer (ou carregue a amostra FortiGate
+              100F) para identificar políticas com zero acertos, sombreadas, desabilitadas ou
+              permissivas.
+            </>
+          ) : (
+            <>
+              Conecte-se à API SonicOS do seu firewall ou importe um arquivo de configuração{' '}
+              <span className="font-mono">.exp</span> / <span className="font-mono">.json</span> para
+              identificar regras com zero acertos, regras desabilitadas e regras sombreadas.
+            </>
+          )}
         </p>
         <button
           type="button"
           onClick={onGoToConnect}
-          className="mt-5 px-4 py-2 text-xs font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C]"
+          className="mt-5 px-4 py-2 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)]"
         >
           Ir para Conexão e Importação
         </button>
@@ -188,20 +207,20 @@ export function UnusedRulesView({ refreshToken, onGoToConnect }: UnusedRulesView
 
   return (
     <div className="space-y-4">
-      <div className="bg-white border border-[#D4E4D8] rounded-lg p-4 flex flex-wrap items-center justify-between gap-4">
+      <div className="bg-white border border-[var(--fw-border)] rounded-lg p-4 flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3 flex-1 min-w-[260px]">
           <div className="relative flex-1 min-w-[220px] max-w-sm">
-            <Search className="w-4 h-4 text-[#6D8B7B] absolute left-3 top-1/2 -translate-y-1/2" />
+            <Search className="w-4 h-4 text-[var(--fw-text-subtle)] absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Buscar regra, zona, IP, serviço..."
-              className="w-full pl-9 pr-3 py-2 text-xs border border-[#BFD5C5] rounded-md focus:outline-none focus:ring-2 focus:ring-[#2A6B52]"
+              className="w-full pl-9 pr-3 py-2 text-xs border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
             />
           </div>
 
-          <div className="flex flex-wrap items-center gap-1 p-1 bg-[#E5EFE8] rounded-md">
+          <div className="flex flex-wrap items-center gap-1 p-1 bg-[var(--fw-surface-alt)] rounded-md">
             {(
               [
                 { id: 'flagged', label: 'Apenas Irregulares' },
@@ -218,8 +237,8 @@ export function UnusedRulesView({ refreshToken, onGoToConnect }: UnusedRulesView
                 onClick={() => setFilter(tab.id)}
                 className={`px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap ${
                   filter === tab.id
-                    ? 'bg-white text-[#123325] shadow-xs'
-                    : 'text-[#456354] hover:text-[#123325]'
+                    ? 'bg-white text-[var(--fw-heading)] shadow-xs'
+                    : 'text-[var(--fw-text-body)] hover:text-[var(--fw-heading)]'
                 }`}
               >
                 {tab.label}
@@ -233,7 +252,7 @@ export function UnusedRulesView({ refreshToken, onGoToConnect }: UnusedRulesView
             type="button"
             disabled={selectedIds.length === 0}
             onClick={() => void openCliGenerator('disable')}
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C] disabled:opacity-40 whitespace-nowrap"
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-40 whitespace-nowrap"
           >
             <TerminalSquare className="w-3.5 h-3.5" />
             Gerar CLI ({selectedIds.length})
@@ -241,7 +260,7 @@ export function UnusedRulesView({ refreshToken, onGoToConnect }: UnusedRulesView
           <button
             type="button"
             onClick={handleExportCsv}
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#1D3B2E] bg-white border border-[#BFD5C5] rounded-md hover:bg-[#EDF5EF] whitespace-nowrap"
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] whitespace-nowrap"
           >
             <Download className="w-3.5 h-3.5" />
             Exportar CSV
@@ -249,19 +268,21 @@ export function UnusedRulesView({ refreshToken, onGoToConnect }: UnusedRulesView
         </div>
       </div>
 
-      <div className="bg-white border border-[#D4E4D8] rounded-lg overflow-hidden">
-        <div className="px-4 py-2.5 border-b border-[#D4E4D8] bg-[#EDF5EF] flex items-center justify-between text-xs text-[#2C4B3D]">
+      <div className="bg-white border border-[var(--fw-border)] rounded-lg overflow-hidden">
+        <div className="px-4 py-2.5 border-b border-[var(--fw-border)] bg-[var(--fw-surface)] flex items-center justify-between text-xs text-[var(--fw-text-body)]">
           <span className="tabular-nums">
             {filteredRules.length.toLocaleString('pt-BR')} regras exibidas de{' '}
             {rules.length.toLocaleString('pt-BR')} carregadas
           </span>
-          <span>Selecione as regras sem uso para gerar script seguro de desabilitação SonicOS</span>
+          <span>
+            Selecione as regras sem uso para gerar script seguro de desabilitação {theme.cliName}
+          </span>
         </div>
 
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
-              <tr className="border-b border-[#D4E4D8] text-[#456354] bg-[#F4F8F5]">
+              <tr className="border-b border-[var(--fw-border)] text-[var(--fw-text-muted)] bg-[var(--fw-bg)]">
                 <th className="py-2.5 pl-4 pr-2 text-left w-8">
                   <input
                     type="checkbox"
@@ -271,60 +292,64 @@ export function UnusedRulesView({ refreshToken, onGoToConnect }: UnusedRulesView
                       filteredRules.every((r) => selectedIds.includes(r.id))
                     }
                     onChange={toggleSelectAllFiltered}
-                    className="rounded border-[#9EC2AA]"
+                    className="rounded border-[var(--fw-border-strong)] accent-[var(--fw-accent)]"
                   />
                 </th>
                 <th className="py-2.5 px-3 text-left font-medium">Regra</th>
-                <th className="py-2.5 px-3 text-left font-medium">Zonas</th>
+                <th className="py-2.5 px-3 text-left font-medium">
+                  {vendor === 'fortigate' ? 'Interfaces (Src → Dst)' : 'Zonas'}
+                </th>
                 <th className="py-2.5 px-3 text-left font-medium">Origem → Destino</th>
                 <th className="py-2.5 px-3 text-left font-medium">Serviço</th>
                 <th className="py-2.5 px-3 text-left font-medium">Ação</th>
-                <th className="py-2.5 px-3 text-right font-medium">Hits SonicOS</th>
+                <th className="py-2.5 px-3 text-right font-medium">
+                  {vendor === 'fortigate' ? 'Hits FortiOS' : 'Hits SonicOS'}
+                </th>
                 <th className="py-2.5 px-3 text-right font-medium">Hits Syslog</th>
                 <th className="py-2.5 px-4 text-left font-medium">Diagnóstico</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#E6F0E8]">
+            <tbody className="divide-y divide-[var(--fw-border-soft)]">
               {filteredRules.map((rule) => (
-                <tr key={rule.id} className="hover:bg-[#F6FAF7] transition-colors">
+                <tr key={rule.id} className="hover:bg-[var(--fw-bg)] transition-colors">
                   <td className="py-3 pl-4 pr-2 align-top">
                     <input
                       type="checkbox"
                       aria-label={`Selecionar ${rule.name}`}
                       checked={selectedIds.includes(rule.id)}
                       onChange={() => toggleSelect(rule.id)}
-                      className="rounded border-[#9EC2AA] mt-0.5"
+                      className="rounded border-[var(--fw-border-strong)] accent-[var(--fw-accent)] mt-0.5"
                     />
                   </td>
                   <td className="py-3 px-3 align-top">
-                    <p className="font-medium text-[#123325]">{rule.name}</p>
-                    <p className="font-mono text-[11px] text-[#4B6B5C] mt-0.5">
+                    <p className="font-medium text-[var(--fw-heading)]">{rule.name}</p>
+                    <p className="font-mono text-[11px] text-[var(--fw-text-muted)] mt-0.5">
                       {rule.id} · Prioridade {rule.priority}
                     </p>
                   </td>
-                  <td className="py-3 px-3 font-mono text-[#2C4B3D] whitespace-nowrap align-top">
+                  <td className="py-3 px-3 font-mono text-[var(--fw-text-body)] whitespace-nowrap align-top">
                     {rule.fromZone} → {rule.toZone}
                   </td>
-                  <td className="py-3 px-3 font-mono text-[#2C4B3D] align-top">
+                  <td className="py-3 px-3 font-mono text-[var(--fw-text-body)] align-top">
                     <span>{rule.source}</span>
-                    <span className="text-[#7CA08A] mx-1">→</span>
+                    <span className="text-[var(--fw-text-subtle)] mx-1">→</span>
                     <span>{rule.destination}</span>
                   </td>
-                  <td className="py-3 px-3 font-mono text-[#2C4B3D] whitespace-nowrap align-top">
+                  <td className="py-3 px-3 font-mono text-[var(--fw-text-body)] whitespace-nowrap align-top">
                     {rule.service}
                   </td>
-                  <td className="py-3 px-3 font-mono uppercase text-[#2C4B3D] whitespace-nowrap align-top">
+                  <td className="py-3 px-3 font-mono uppercase text-[var(--fw-text-body)] whitespace-nowrap align-top">
                     {rule.action}
                   </td>
-                  <td className="py-3 px-3 text-right font-mono tabular-nums text-[#123325] align-top">
+                  <td className="py-3 px-3 text-right font-mono tabular-nums text-[var(--fw-heading)] align-top">
                     {rule.applianceHits.toLocaleString('pt-BR')}
                   </td>
-                  <td className="py-3 px-3 text-right font-mono tabular-nums text-[#123325] align-top">
+                  <td className="py-3 px-3 text-right font-mono tabular-nums text-[var(--fw-heading)] align-top">
                     {rule.syslogHits.toLocaleString('pt-BR')}
                   </td>
                   <td className="py-3 px-4 align-top max-w-xs">
                     <div>{renderStatus(rule.status)}</div>
-                    <p className="text-[11px] text-[#4B6B5C] mt-1 leading-snug">
+                    <p className="text-[11px] text-[var(--fw-text-muted)] mt-1 leading-snug">
                       {rule.findingReason}
                     </p>
                   </td>
@@ -337,7 +362,8 @@ export function UnusedRulesView({ refreshToken, onGoToConnect }: UnusedRulesView
 
       {cliModal && (
         <CliScriptModal
-          title="Script SonicOS CLI — Regras de Firewall"
+          vendor={vendor}
+          title={`Script ${theme.cliName} — Regras de Firewall`}
           script={cliModal.script}
           mode={cliModal.mode}
           onModeChange={(nextMode) => void openCliGenerator(nextMode)}

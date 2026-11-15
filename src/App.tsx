@@ -10,9 +10,22 @@ import { SyslogView } from './components/SyslogView.tsx';
 import { TopBar } from './components/TopBar.tsx';
 import { UnusedNatsView } from './components/UnusedNatsView.tsx';
 import { UnusedRulesView } from './components/UnusedRulesView.tsx';
-import type { ActiveSection, AuditOverview, AuthStatus } from './types.ts';
+import type { ActiveSection, AuditOverview, AuthStatus, FirewallVendor } from './types.ts';
+import { vendorApiUrl } from './utils/vendorApi.ts';
+
+const VENDOR_STORAGE_KEY = 'fwaudit:active-vendor';
+
+function readInitialVendor(): FirewallVendor {
+  try {
+    const saved = localStorage.getItem(VENDOR_STORAGE_KEY);
+    return saved === 'fortigate' ? 'fortigate' : 'sonicwall';
+  } catch {
+    return 'sonicwall';
+  }
+}
 
 export default function App() {
+  const [activeVendor, setActiveVendor] = useState<FirewallVendor>(readInitialVendor);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [authChecking, setAuthChecking] = useState(true);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
@@ -24,6 +37,15 @@ export default function App() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [pendingAiPrompt, setPendingAiPrompt] = useState<string | null>(null);
   const [pendingSyslogQuery, setPendingSyslogQuery] = useState<string | null>(null);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-vendor', activeVendor);
+    try {
+      localStorage.setItem(VENDOR_STORAGE_KEY, activeVendor);
+    } catch {
+      // ignore storage quota errors
+    }
+  }, [activeVendor]);
 
   const fetchAuthStatus = useCallback(async () => {
     try {
@@ -44,7 +66,7 @@ export default function App() {
   const fetchOverview = useCallback(async () => {
     if (!auth?.authenticated) return;
     try {
-      const res = await fetch('/api/overview');
+      const res = await fetch(vendorApiUrl(activeVendor, '/overview'));
       if (res.status === 401) {
         setAuth((prev) => (prev ? { ...prev, authenticated: false, username: null } : prev));
         return;
@@ -56,7 +78,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [auth?.authenticated]);
+  }, [auth?.authenticated, activeVendor]);
 
   useEffect(() => {
     if (auth?.authenticated) {
@@ -76,6 +98,16 @@ export default function App() {
     setRefreshToken((n) => n + 1);
   }, []);
 
+  const handleSelectVendor = (nextVendor: FirewallVendor) => {
+    if (nextVendor === activeVendor) return;
+    setOverview(null);
+    setLoading(true);
+    setPendingAiPrompt(null);
+    setPendingSyslogQuery(null);
+    setActiveVendor(nextVendor);
+    setRefreshToken((n) => n + 1);
+  };
+
   const handleAuthenticated = (username: string) => {
     setAuth({ authenticated: true, needsSetup: false, username });
     setLoading(true);
@@ -89,7 +121,9 @@ export default function App() {
   };
 
   const handleSelectSite = async (siteId: string) => {
-    const res = await fetch(`/api/sites/${siteId}/select`, { method: 'POST' });
+    const res = await fetch(vendorApiUrl(activeVendor, `/sites/${siteId}/select`), {
+      method: 'POST',
+    });
     if (res.ok) {
       const data = await res.json();
       if (data.overview) setOverview(data.overview);
@@ -100,7 +134,7 @@ export default function App() {
   const handleLoadSample = async () => {
     setLoadingSample(true);
     try {
-      const res = await fetch('/api/sample/load', { method: 'POST' });
+      const res = await fetch(vendorApiUrl(activeVendor, '/sample/load'), { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         if (data.overview) setOverview(data.overview);
@@ -123,8 +157,8 @@ export default function App() {
 
   if (authChecking) {
     return (
-      <div className="min-h-screen bg-[#F4F8F5] flex items-center justify-center p-6">
-        <div className="w-full max-w-md h-64 bg-white border border-[#D4E4D8] rounded-lg animate-pulse" />
+      <div className="min-h-screen bg-[var(--fw-bg)] flex items-center justify-center p-6">
+        <div className="w-full max-w-md h-64 bg-white border border-[var(--fw-border)] rounded-lg animate-pulse" />
       </div>
     );
   }
@@ -139,8 +173,10 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F4F8F5] text-[#162820] flex">
+    <div className="min-h-screen bg-[var(--fw-bg)] text-[var(--fw-text)] flex transition-colors">
       <Sidebar
+        vendor={activeVendor}
+        onSelectVendor={handleSelectVendor}
         activeSection={activeSection}
         onSelectSection={setActiveSection}
         overview={overview}
@@ -152,6 +188,7 @@ export default function App() {
 
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar
+          vendor={activeVendor}
           activeSection={activeSection}
           activeSiteName={overview?.activeSite?.name}
           onLoadSample={() => void handleLoadSample()}
@@ -162,6 +199,7 @@ export default function App() {
         <main className="flex-1 p-6 max-w-[1440px] w-full mx-auto">
           {activeSection === 'overview' && (
             <OverviewView
+              vendor={activeVendor}
               overview={overview}
               loading={loading}
               onNavigate={setActiveSection}
@@ -174,6 +212,7 @@ export default function App() {
 
           {activeSection === 'syslogs' && (
             <SyslogView
+              vendor={activeVendor}
               refreshToken={refreshToken}
               onDataChanged={handleDataChanged}
               onAnalyzeEvent={handleAnalyzeEventWithAi}
@@ -184,6 +223,7 @@ export default function App() {
 
           {activeSection === 'rules' && (
             <UnusedRulesView
+              vendor={activeVendor}
               refreshToken={refreshToken}
               onGoToConnect={() => setActiveSection('connect')}
             />
@@ -191,6 +231,7 @@ export default function App() {
 
           {activeSection === 'nats' && (
             <UnusedNatsView
+              vendor={activeVendor}
               refreshToken={refreshToken}
               onGoToConnect={() => setActiveSection('connect')}
             />
@@ -198,6 +239,7 @@ export default function App() {
 
           {activeSection === 'reports' && (
             <ReportsView
+              vendor={activeVendor}
               refreshToken={refreshToken}
               onGoToConnect={() => setActiveSection('connect')}
               onLoadSample={() => void handleLoadSample()}
@@ -206,6 +248,7 @@ export default function App() {
 
           {activeSection === 'ai' && (
             <AiAnalystView
+              vendor={activeVendor}
               overview={overview}
               pendingPrompt={pendingAiPrompt}
               onConsumePendingPrompt={() => setPendingAiPrompt(null)}
@@ -214,6 +257,7 @@ export default function App() {
 
           {activeSection === 'connect' && (
             <ConnectLinuxView
+              vendor={activeVendor}
               overview={overview}
               onDataChanged={handleDataChanged}
               onOverviewUpdated={setOverview}

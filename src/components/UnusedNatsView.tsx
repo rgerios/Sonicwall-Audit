@@ -7,17 +7,21 @@ import {
   Search,
   TerminalSquare,
 } from 'lucide-react';
-import type { NatPolicy } from '../types.ts';
+import type { FirewallVendor, NatPolicy } from '../types.ts';
+import { vendorApiUrl } from '../utils/vendorApi.ts';
+import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
 import { CliScriptModal } from './CliScriptModal.tsx';
 
 interface UnusedNatsViewProps {
+  vendor: FirewallVendor;
   refreshToken: number;
   onGoToConnect: () => void;
 }
 
 type NatFilter = 'flagged' | 'all' | 'unused' | 'orphaned' | 'disabled';
 
-export function UnusedNatsView({ refreshToken, onGoToConnect }: UnusedNatsViewProps) {
+export function UnusedNatsView({ vendor, refreshToken, onGoToConnect }: UnusedNatsViewProps) {
+  const theme = VENDOR_THEMES[vendor];
   const [nats, setNats] = useState<NatPolicy[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<NatFilter>('flagged');
@@ -30,10 +34,15 @@ export function UnusedNatsView({ refreshToken, onGoToConnect }: UnusedNatsViewPr
   } | null>(null);
 
   useEffect(() => {
+    setSelectedIds([]);
+    setCliModal(null);
+  }, [vendor]);
+
+  useEffect(() => {
     const load = async () => {
       setLoading(true);
       try {
-        const res = await fetch('/api/nats');
+        const res = await fetch(vendorApiUrl(vendor, '/nats'));
         if (res.ok) {
           const data = await res.json();
           setNats(data.nats || []);
@@ -43,7 +52,7 @@ export function UnusedNatsView({ refreshToken, onGoToConnect }: UnusedNatsViewPr
       }
     };
     void load();
-  }, [refreshToken]);
+  }, [vendor, refreshToken]);
 
   const filteredNats = useMemo(() => {
     return nats.filter((n) => {
@@ -77,7 +86,7 @@ export function UnusedNatsView({ refreshToken, onGoToConnect }: UnusedNatsViewPr
 
   const openCliGenerator = async (mode: 'disable' | 'delete') => {
     if (selectedIds.length === 0) return;
-    const res = await fetch('/api/export/cli', {
+    const res = await fetch(vendorApiUrl(vendor, '/export/cli'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ruleIds: [], natIds: selectedIds, mode }),
@@ -126,7 +135,7 @@ export function UnusedNatsView({ refreshToken, onGoToConnect }: UnusedNatsViewPr
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'sonicwall-nats-auditoria.csv';
+    a.download = `${vendor}-nats-auditoria.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -147,7 +156,7 @@ export function UnusedNatsView({ refreshToken, onGoToConnect }: UnusedNatsViewPr
         );
       case 'disabled':
         return (
-          <span className="inline-flex items-center gap-1.5 text-[#5C7A6B] font-medium whitespace-nowrap">
+          <span className="inline-flex items-center gap-1.5 text-[var(--fw-text-subtle)] font-medium whitespace-nowrap">
             Desabilitada
           </span>
         );
@@ -162,17 +171,30 @@ export function UnusedNatsView({ refreshToken, onGoToConnect }: UnusedNatsViewPr
 
   if (!loading && nats.length === 0) {
     return (
-      <div className="bg-white border border-[#D4E4D8] rounded-lg p-10 max-w-2xl">
-        <h2 className="text-lg font-semibold text-[#123325]">Nenhuma política NAT carregada</h2>
-        <p className="text-xs text-[#456354] mt-2 leading-relaxed">
-          Conecte-se à API do SonicWall ou importe seu arquivo <span className="font-mono">.exp</span> /{' '}
-          <span className="font-mono">.json</span> para auditar traduções SNAT/DNAT sem tráfego e
-          políticas órfãs.
+      <div className="bg-white border border-[var(--fw-border)] rounded-lg p-10 max-w-2xl">
+        <h2 className="text-lg font-semibold text-[var(--fw-heading)]">
+          {vendor === 'fortigate'
+            ? 'Nenhum VIP, IP Pool ou NAT carregado'
+            : 'Nenhuma política NAT carregada'}
+        </h2>
+        <p className="text-xs text-[var(--fw-text-muted)] mt-2 leading-relaxed">
+          {vendor === 'fortigate' ? (
+            <>
+              Conecte-se à API REST do FortiOS ou carregue a amostra FortiGate 100F para auditar
+              VIPs (DNAT), IP Pools (SNAT) e entradas Central SNAT sem tráfego ou órfãs.
+            </>
+          ) : (
+            <>
+              Conecte-se à API do SonicWall ou importe seu arquivo{' '}
+              <span className="font-mono">.exp</span> / <span className="font-mono">.json</span> para
+              auditar traduções SNAT/DNAT sem tráfego e políticas órfãs.
+            </>
+          )}
         </p>
         <button
           type="button"
           onClick={onGoToConnect}
-          className="mt-5 px-4 py-2 text-xs font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C]"
+          className="mt-5 px-4 py-2 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)]"
         >
           Ir para Conexão e Importação
         </button>
@@ -182,20 +204,24 @@ export function UnusedNatsView({ refreshToken, onGoToConnect }: UnusedNatsViewPr
 
   return (
     <div className="space-y-4">
-      <div className="bg-white border border-[#D4E4D8] rounded-lg p-4 flex flex-wrap items-center justify-between gap-4">
+      <div className="bg-white border border-[var(--fw-border)] rounded-lg p-4 flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3 flex-1 min-w-[260px]">
           <div className="relative flex-1 min-w-[220px] max-w-sm">
-            <Search className="w-4 h-4 text-[#6D8B7B] absolute left-3 top-1/2 -translate-y-1/2" />
+            <Search className="w-4 h-4 text-[var(--fw-text-subtle)] absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Buscar NAT, IP público/interno, porta..."
-              className="w-full pl-9 pr-3 py-2 text-xs border border-[#BFD5C5] rounded-md focus:outline-none focus:ring-2 focus:ring-[#2A6B52]"
+              placeholder={
+                vendor === 'fortigate'
+                  ? 'Buscar VIP, IP Pool, IP público/interno...'
+                  : 'Buscar NAT, IP público/interno, porta...'
+              }
+              className="w-full pl-9 pr-3 py-2 text-xs border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
             />
           </div>
 
-          <div className="flex flex-wrap items-center gap-1 p-1 bg-[#E5EFE8] rounded-md">
+          <div className="flex flex-wrap items-center gap-1 p-1 bg-[var(--fw-surface-alt)] rounded-md">
             {(
               [
                 { id: 'flagged', label: 'Apenas Sem Uso' },
@@ -211,8 +237,8 @@ export function UnusedNatsView({ refreshToken, onGoToConnect }: UnusedNatsViewPr
                 onClick={() => setFilter(tab.id)}
                 className={`px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap ${
                   filter === tab.id
-                    ? 'bg-white text-[#123325] shadow-xs'
-                    : 'text-[#456354] hover:text-[#123325]'
+                    ? 'bg-white text-[var(--fw-heading)] shadow-xs'
+                    : 'text-[var(--fw-text-body)] hover:text-[var(--fw-heading)]'
                 }`}
               >
                 {tab.label}
@@ -226,7 +252,7 @@ export function UnusedNatsView({ refreshToken, onGoToConnect }: UnusedNatsViewPr
             type="button"
             disabled={selectedIds.length === 0}
             onClick={() => void openCliGenerator('disable')}
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C] disabled:opacity-40 whitespace-nowrap"
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-40 whitespace-nowrap"
           >
             <TerminalSquare className="w-3.5 h-3.5" />
             Gerar CLI ({selectedIds.length})
@@ -234,7 +260,7 @@ export function UnusedNatsView({ refreshToken, onGoToConnect }: UnusedNatsViewPr
           <button
             type="button"
             onClick={handleExportCsv}
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#1D3B2E] bg-white border border-[#BFD5C5] rounded-md hover:bg-[#EDF5EF] whitespace-nowrap"
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] whitespace-nowrap"
           >
             <Download className="w-3.5 h-3.5" />
             Exportar CSV
@@ -242,10 +268,10 @@ export function UnusedNatsView({ refreshToken, onGoToConnect }: UnusedNatsViewPr
         </div>
       </div>
 
-      <div className="bg-white border border-[#D4E4D8] rounded-lg overflow-hidden">
-        <div className="px-4 py-2.5 border-b border-[#D4E4D8] bg-[#EDF5EF] flex items-center justify-between text-xs text-[#2C4B3D]">
+      <div className="bg-white border border-[var(--fw-border)] rounded-lg overflow-hidden">
+        <div className="px-4 py-2.5 border-b border-[var(--fw-border)] bg-[var(--fw-surface)] flex items-center justify-between text-xs text-[var(--fw-text-body)]">
           <span className="tabular-nums">
-            {filteredNats.length.toLocaleString('pt-BR')} políticas NAT exibidas de{' '}
+            {filteredNats.length.toLocaleString('pt-BR')} traduções exibidas de{' '}
             {nats.length.toLocaleString('pt-BR')} carregadas
           </span>
           <span>Tradução Original → Traduzido verificada contra os logs</span>
@@ -254,7 +280,7 @@ export function UnusedNatsView({ refreshToken, onGoToConnect }: UnusedNatsViewPr
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
-              <tr className="border-b border-[#D4E4D8] text-[#456354] bg-[#F4F8F5]">
+              <tr className="border-b border-[var(--fw-border)] text-[var(--fw-text-muted)] bg-[var(--fw-bg)]">
                 <th className="py-2.5 pl-4 pr-2 text-left w-8">
                   <input
                     type="checkbox"
@@ -264,61 +290,65 @@ export function UnusedNatsView({ refreshToken, onGoToConnect }: UnusedNatsViewPr
                       filteredNats.every((n) => selectedIds.includes(n.id))
                     }
                     onChange={toggleSelectAllFiltered}
-                    className="rounded border-[#9EC2AA]"
+                    className="rounded border-[var(--fw-border-strong)] accent-[var(--fw-accent)]"
                   />
                 </th>
-                <th className="py-2.5 px-3 text-left font-medium">Política NAT</th>
+                <th className="py-2.5 px-3 text-left font-medium">
+                  {vendor === 'fortigate' ? 'VIP / IP Pool / NAT' : 'Política NAT'}
+                </th>
                 <th className="py-2.5 px-3 text-left font-medium">Interfaces</th>
                 <th className="py-2.5 px-3 text-left font-medium">Origem (Orig → Trad)</th>
                 <th className="py-2.5 px-3 text-left font-medium">Destino (Orig → Trad)</th>
                 <th className="py-2.5 px-3 text-left font-medium">Serviço</th>
-                <th className="py-2.5 px-3 text-right font-medium">Hits SonicOS</th>
+                <th className="py-2.5 px-3 text-right font-medium">
+                  {vendor === 'fortigate' ? 'Hits FortiOS' : 'Hits SonicOS'}
+                </th>
                 <th className="py-2.5 px-3 text-right font-medium">Hits Syslog</th>
                 <th className="py-2.5 px-4 text-left font-medium">Diagnóstico</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#E6F0E8]">
+            <tbody className="divide-y divide-[var(--fw-border-soft)]">
               {filteredNats.map((nat) => (
-                <tr key={nat.id} className="hover:bg-[#F6FAF7] transition-colors">
+                <tr key={nat.id} className="hover:bg-[var(--fw-bg)] transition-colors">
                   <td className="py-3 pl-4 pr-2 align-top">
                     <input
                       type="checkbox"
                       aria-label={`Selecionar ${nat.name}`}
                       checked={selectedIds.includes(nat.id)}
                       onChange={() => toggleSelect(nat.id)}
-                      className="rounded border-[#9EC2AA] mt-0.5"
+                      className="rounded border-[var(--fw-border-strong)] accent-[var(--fw-accent)] mt-0.5"
                     />
                   </td>
                   <td className="py-3 px-3 align-top">
-                    <p className="font-medium text-[#123325]">{nat.name}</p>
-                    <p className="font-mono text-[11px] text-[#4B6B5C] mt-0.5">
+                    <p className="font-medium text-[var(--fw-heading)]">{nat.name}</p>
+                    <p className="font-mono text-[11px] text-[var(--fw-text-muted)] mt-0.5">
                       {nat.id} · Prioridade {nat.priority}
                     </p>
                   </td>
-                  <td className="py-3 px-3 font-mono text-[#2C4B3D] whitespace-nowrap align-top">
+                  <td className="py-3 px-3 font-mono text-[var(--fw-text-body)] whitespace-nowrap align-top">
                     {nat.inboundInterface} → {nat.outboundInterface}
                   </td>
-                  <td className="py-3 px-3 font-mono text-[#2C4B3D] align-top">
+                  <td className="py-3 px-3 font-mono text-[var(--fw-text-body)] align-top">
                     {nat.origSource} → {nat.transSource}
                   </td>
-                  <td className="py-3 px-3 font-mono text-[#2C4B3D] align-top">
+                  <td className="py-3 px-3 font-mono text-[var(--fw-text-body)] align-top">
                     {nat.origDestination} → {nat.transDestination}
                   </td>
-                  <td className="py-3 px-3 font-mono text-[#2C4B3D] whitespace-nowrap align-top">
+                  <td className="py-3 px-3 font-mono text-[var(--fw-text-body)] whitespace-nowrap align-top">
                     {nat.origService}
                     {nat.transService !== 'Original' && nat.transService !== nat.origService
                       ? ` → ${nat.transService}`
                       : ''}
                   </td>
-                  <td className="py-3 px-3 text-right font-mono tabular-nums text-[#123325] align-top">
+                  <td className="py-3 px-3 text-right font-mono tabular-nums text-[var(--fw-heading)] align-top">
                     {nat.applianceHits.toLocaleString('pt-BR')}
                   </td>
-                  <td className="py-3 px-3 text-right font-mono tabular-nums text-[#123325] align-top">
+                  <td className="py-3 px-3 text-right font-mono tabular-nums text-[var(--fw-heading)] align-top">
                     {nat.syslogHits.toLocaleString('pt-BR')}
                   </td>
                   <td className="py-3 px-4 align-top max-w-xs">
                     <div>{renderStatus(nat.status)}</div>
-                    <p className="text-[11px] text-[#4B6B5C] mt-1 leading-snug">
+                    <p className="text-[11px] text-[var(--fw-text-muted)] mt-1 leading-snug">
                       {nat.findingReason}
                     </p>
                   </td>
@@ -331,7 +361,8 @@ export function UnusedNatsView({ refreshToken, onGoToConnect }: UnusedNatsViewPr
 
       {cliModal && (
         <CliScriptModal
-          title="Script SonicOS CLI — Políticas NAT"
+          vendor={vendor}
+          title={`Script ${theme.cliName} — ${vendor === 'fortigate' ? 'VIPs / IP Pools / NAT' : 'Políticas NAT'}`}
           script={cliModal.script}
           mode={cliModal.mode}
           onModeChange={(nextMode) => void openCliGenerator(nextMode)}

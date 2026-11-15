@@ -6,12 +6,62 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
+:root,
+[data-vendor="sonicwall"] {
+  --fw-bg: #F3F7FC;
+  --fw-bg-input: #F8FBFF;
+  --fw-surface: #E9F0FA;
+  --fw-surface-alt: #DFEAFA;
+  --fw-surface-soft: #EEF4FC;
+  --fw-surface-chip: #D6E4F7;
+  --fw-border: #CAD9EE;
+  --fw-border-strong: #AFC5E5;
+  --fw-border-soft: #E1EAF7;
+  --fw-heading: #102A43;
+  --fw-text: #1A365D;
+  --fw-text-body: #243B53;
+  --fw-text-muted: #486581;
+  --fw-text-subtle: #627D98;
+  --fw-text-faint: #829AB1;
+  --fw-accent: #1D4E89;
+  --fw-accent-hover: #163D6B;
+  --fw-accent-mid: #2B6CB0;
+  --fw-accent-on-dark: #C3D9F5;
+  --fw-terminal-bg: #0F1E33;
+  --fw-terminal-text: #E6EFFA;
+}
+
+[data-vendor="fortigate"] {
+  --fw-bg: #FCF4F4;
+  --fw-bg-input: #FFF9F9;
+  --fw-surface: #F9EAEA;
+  --fw-surface-alt: #F4DFDF;
+  --fw-surface-soft: #FBF0F0;
+  --fw-surface-chip: #F1D3D3;
+  --fw-border: #EACACA;
+  --fw-border-strong: #DEB0B0;
+  --fw-border-soft: #F4DFDF;
+  --fw-heading: #451212;
+  --fw-text: #4A1818;
+  --fw-text-body: #5C2323;
+  --fw-text-muted: #7B4242;
+  --fw-text-subtle: #8F5656;
+  --fw-text-faint: #A87676;
+  --fw-accent: #9B2C2C;
+  --fw-accent-hover: #7F2323;
+  --fw-accent-mid: #C53030;
+  --fw-accent-on-dark: #F8D0D0;
+  --fw-terminal-bg: #261010;
+  --fw-terminal-text: #FCECEC;
+}
+
 @layer base {
   html {
     font-family: var(--font-sans);
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
-    background-color: #f4f8f5;
-    color: #162820;
+    background-color: var(--fw-bg);
+    color: var(--fw-text);
+    transition: background-color 180ms ease, color 180ms ease;
   }
 
   h1, h2, h3, h4 {

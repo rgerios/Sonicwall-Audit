@@ -1,6 +1,7 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { AuditReportData } from '../types.ts';
+import { VENDOR_THEMES } from './vendorTheme.ts';
 
 function getLastAutoTableY(doc: jsPDF, fallback: number): number {
   const internal = doc as unknown as { lastAutoTable?: { finalY?: number } };
@@ -22,13 +23,19 @@ function ensureSpace(doc: jsPDF, currentY: number, neededHeight: number): number
   return currentY;
 }
 
-function drawSectionHeading(doc: jsPDF, title: string, y: number): number {
+function drawSectionHeading(
+  doc: jsPDF,
+  title: string,
+  y: number,
+  headingRgb: [number, number, number],
+  borderRgb: [number, number, number]
+): number {
   const nextY = ensureSpace(doc, y, 16);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
-  doc.setTextColor(18, 51, 37);
+  doc.setTextColor(headingRgb[0], headingRgb[1], headingRgb[2]);
   doc.text(title, 14, nextY);
-  doc.setDrawColor(212, 228, 216);
+  doc.setDrawColor(borderRgb[0], borderRgb[1], borderRgb[2]);
   doc.setLineWidth(0.35);
   doc.line(14, nextY + 2.2, 196, nextY + 2.2);
   return nextY + 7;
@@ -43,23 +50,24 @@ export function exportAuditReportPdf(report: AuditReportData): void {
 
   const { overview } = report;
   const pageWidth = doc.internal.pageSize.getWidth();
+  const theme = VENDOR_THEMES[overview.vendor || 'sonicwall'];
 
   const ap = overview.appliance;
   const telemetry = overview.telemetry || { interfaces: [], vpns: [], licenses: [] };
 
-  // Header Banner (Pastel Mint)
-  doc.setFillColor(237, 245, 239);
-  doc.setDrawColor(212, 228, 216);
+  // Header Banner (Pastel Vendor Theme)
+  doc.setFillColor(...theme.pdfHeaderRgb);
+  doc.setDrawColor(...theme.pdfBorderRgb);
   doc.roundedRect(14, 12, pageWidth - 28, 30, 2, 2, 'FD');
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(14);
-  doc.setTextColor(18, 51, 37);
-  doc.text('Relatorio Consolidado de Auditoria SonicWall', 19, 20);
+  doc.setTextColor(...theme.pdfHeadingRgb);
+  doc.text(`FW Audit — Relatorio ${theme.label} (${theme.platformSubtitle})`, 19, 20);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.2);
-  doc.setTextColor(69, 99, 84);
+  doc.setTextColor(...theme.pdfMutedRgb);
   const siteLabel = overview.activeSite
     ? `${overview.activeSite.name}${overview.activeSite.location ? ` (${overview.activeSite.location})` : ''}  |  `
     : '';
@@ -124,30 +132,36 @@ export function exportAuditReportPdf(report: AuditReportData): void {
 
   kpis.forEach((kpi, idx) => {
     const x = 14 + idx * (cardWidth + cardGap);
-    doc.setFillColor(244, 248, 245);
-    doc.setDrawColor(212, 228, 216);
+    doc.setFillColor(...theme.pdfAltRowRgb);
+    doc.setDrawColor(...theme.pdfBorderRgb);
     doc.roundedRect(x, y, cardWidth, 19, 1.5, 1.5, 'FD');
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
-    doc.setTextColor(69, 99, 84);
+    doc.setTextColor(...theme.pdfMutedRgb);
     doc.text(kpi.label, x + 3, y + 5.5);
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(12);
-    doc.setTextColor(18, 51, 37);
+    doc.setTextColor(...theme.pdfHeadingRgb);
     doc.text(kpi.value, x + 3, y + 12);
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.8);
-    doc.setTextColor(92, 122, 107);
+    doc.setTextColor(...theme.pdfMutedRgb);
     doc.text(kpi.sub, x + 3, y + 16.5);
   });
 
   y += 27;
 
   if (telemetry.interfaces.length > 0) {
-    y = drawSectionHeading(doc, `Consumo de Link e Interfaces (${telemetry.interfaces.length})`, y);
+    y = drawSectionHeading(
+      doc,
+      `Consumo de Link e Interfaces (${telemetry.interfaces.length})`,
+      y,
+      theme.pdfHeadingRgb,
+      theme.pdfBorderRgb
+    );
     autoTable(doc, {
       startY: y,
       margin: { left: 14, right: 14 },
@@ -165,17 +179,17 @@ export function exportAuditReportPdf(report: AuditReportData): void {
       styles: {
         fontSize: 7.5,
         cellPadding: 2.2,
-        textColor: [22, 40, 32],
-        lineColor: [225, 237, 229],
+        textColor: theme.pdfHeadingRgb,
+        lineColor: theme.pdfBorderRgb,
         lineWidth: 0.2,
       },
       headStyles: {
-        fillColor: [30, 77, 59],
+        fillColor: theme.pdfAccentRgb,
         textColor: [255, 255, 255],
         fontStyle: 'bold',
       },
       alternateRowStyles: {
-        fillColor: [248, 251, 249],
+        fillColor: theme.pdfAltRowRgb,
       },
       columnStyles: {
         4: { halign: 'right' },
@@ -188,7 +202,13 @@ export function exportAuditReportPdf(report: AuditReportData): void {
   }
 
   if (telemetry.vpns.length > 0 || telemetry.licenses.length > 0) {
-    y = drawSectionHeading(doc, 'Tuneis VPN e Licenciamento SonicWall', y);
+    y = drawSectionHeading(
+      doc,
+      `Tuneis VPN e Licenciamento ${theme.label}`,
+      y,
+      theme.pdfHeadingRgb,
+      theme.pdfBorderRgb
+    );
     if (telemetry.vpns.length > 0) {
       autoTable(doc, {
         startY: y,
@@ -198,17 +218,17 @@ export function exportAuditReportPdf(report: AuditReportData): void {
         styles: {
           fontSize: 7.5,
           cellPadding: 2.2,
-          textColor: [22, 40, 32],
-          lineColor: [225, 237, 229],
+          textColor: theme.pdfHeadingRgb,
+          lineColor: theme.pdfBorderRgb,
           lineWidth: 0.2,
         },
         headStyles: {
-          fillColor: [30, 77, 59],
+          fillColor: theme.pdfAccentRgb,
           textColor: [255, 255, 255],
           fontStyle: 'bold',
         },
         alternateRowStyles: {
-          fillColor: [248, 251, 249],
+          fillColor: theme.pdfAltRowRgb,
         },
       });
       y = getLastAutoTableY(doc, y) + 6;
@@ -222,17 +242,17 @@ export function exportAuditReportPdf(report: AuditReportData): void {
         styles: {
           fontSize: 7.5,
           cellPadding: 2.2,
-          textColor: [22, 40, 32],
-          lineColor: [225, 237, 229],
+          textColor: theme.pdfHeadingRgb,
+          lineColor: theme.pdfBorderRgb,
           lineWidth: 0.2,
         },
         headStyles: {
-          fillColor: [30, 77, 59],
+          fillColor: theme.pdfAccentRgb,
           textColor: [255, 255, 255],
           fontStyle: 'bold',
         },
         alternateRowStyles: {
-          fillColor: [248, 251, 249],
+          fillColor: theme.pdfAltRowRgb,
         },
       });
       y = getLastAutoTableY(doc, y) + 9;
@@ -240,7 +260,13 @@ export function exportAuditReportPdf(report: AuditReportData): void {
   }
 
   // Section 1: Recommendations
-  y = drawSectionHeading(doc, '1. Plano de Acao e Recomendacoes', y);
+  y = drawSectionHeading(
+    doc,
+    '1. Plano de Acao e Recomendacoes',
+    y,
+    theme.pdfHeadingRgb,
+    theme.pdfBorderRgb
+  );
   autoTable(doc, {
     startY: y,
     margin: { left: 14, right: 14 },
@@ -257,17 +283,17 @@ export function exportAuditReportPdf(report: AuditReportData): void {
     styles: {
       fontSize: 8,
       cellPadding: 2.5,
-      textColor: [22, 40, 32],
-      lineColor: [225, 237, 229],
+      textColor: theme.pdfHeadingRgb,
+      lineColor: theme.pdfBorderRgb,
       lineWidth: 0.2,
     },
     headStyles: {
-      fillColor: [30, 77, 59],
+      fillColor: theme.pdfAccentRgb,
       textColor: [255, 255, 255],
       fontStyle: 'bold',
     },
     alternateRowStyles: {
-      fillColor: [248, 251, 249],
+      fillColor: theme.pdfAltRowRgb,
     },
     columnStyles: {
       0: { cellWidth: 22, fontStyle: 'bold' },
@@ -278,11 +304,17 @@ export function exportAuditReportPdf(report: AuditReportData): void {
   y = getLastAutoTableY(doc, y) + 10;
 
   // Section 2: Firewall Rules
-  y = drawSectionHeading(doc, `2. Inventario de Regras de Firewall (${report.rules.length})`, y);
+  y = drawSectionHeading(
+    doc,
+    `2. Inventario de Regras de Firewall (${report.rules.length})`,
+    y,
+    theme.pdfHeadingRgb,
+    theme.pdfBorderRgb
+  );
   autoTable(doc, {
     startY: y,
     margin: { left: 14, right: 14 },
-    head: [['ID', 'Nome', 'Zonas', 'Origem -> Destino', 'Servico', 'SonicOS', 'Syslog', 'Status']],
+    head: [['ID', 'Nome', 'Zonas', 'Origem -> Destino', 'Servico', theme.label, 'Syslog', 'Status']],
     body:
       report.rules.length > 0
         ? report.rules.map((r) => [
@@ -299,17 +331,17 @@ export function exportAuditReportPdf(report: AuditReportData): void {
     styles: {
       fontSize: 7.4,
       cellPadding: 2.2,
-      textColor: [22, 40, 32],
-      lineColor: [225, 237, 229],
+      textColor: theme.pdfHeadingRgb,
+      lineColor: theme.pdfBorderRgb,
       lineWidth: 0.2,
     },
     headStyles: {
-      fillColor: [30, 77, 59],
+      fillColor: theme.pdfAccentRgb,
       textColor: [255, 255, 255],
       fontStyle: 'bold',
     },
     alternateRowStyles: {
-      fillColor: [248, 251, 249],
+      fillColor: theme.pdfAltRowRgb,
     },
     columnStyles: {
       0: { cellWidth: 15 },
@@ -323,11 +355,17 @@ export function exportAuditReportPdf(report: AuditReportData): void {
   y = getLastAutoTableY(doc, y) + 10;
 
   // Section 3: NAT Policies
-  y = drawSectionHeading(doc, `3. Inventario de Politicas NAT (${report.nats.length})`, y);
+  y = drawSectionHeading(
+    doc,
+    `3. Inventario de Politicas NAT / VIP (${report.nats.length})`,
+    y,
+    theme.pdfHeadingRgb,
+    theme.pdfBorderRgb
+  );
   autoTable(doc, {
     startY: y,
     margin: { left: 14, right: 14 },
-    head: [['ID', 'Nome', 'Interfaces', 'Destino (Orig -> Trad)', 'Servico', 'SonicOS', 'Syslog', 'Status']],
+    head: [['ID', 'Nome', 'Interfaces', 'Destino (Orig -> Trad)', 'Servico', theme.label, 'Syslog', 'Status']],
     body:
       report.nats.length > 0
         ? report.nats.map((n) => [
@@ -344,17 +382,17 @@ export function exportAuditReportPdf(report: AuditReportData): void {
     styles: {
       fontSize: 7.4,
       cellPadding: 2.2,
-      textColor: [22, 40, 32],
-      lineColor: [225, 237, 229],
+      textColor: theme.pdfHeadingRgb,
+      lineColor: theme.pdfBorderRgb,
       lineWidth: 0.2,
     },
     headStyles: {
-      fillColor: [30, 77, 59],
+      fillColor: theme.pdfAccentRgb,
       textColor: [255, 255, 255],
       fontStyle: 'bold',
     },
     alternateRowStyles: {
-      fillColor: [248, 251, 249],
+      fillColor: theme.pdfAltRowRgb,
     },
     columnStyles: {
       0: { cellWidth: 15 },
@@ -372,7 +410,9 @@ export function exportAuditReportPdf(report: AuditReportData): void {
     y = drawSectionHeading(
       doc,
       `4. Eventos Criticos e Bloqueios Recentes (${report.criticalEvents.length})`,
-      y
+      y,
+      theme.pdfHeadingRgb,
+      theme.pdfBorderRgb
     );
     autoTable(doc, {
       startY: y,
@@ -389,17 +429,17 @@ export function exportAuditReportPdf(report: AuditReportData): void {
       styles: {
         fontSize: 7.2,
         cellPadding: 2,
-        textColor: [22, 40, 32],
-        lineColor: [225, 237, 229],
+        textColor: theme.pdfHeadingRgb,
+        lineColor: theme.pdfBorderRgb,
         lineWidth: 0.2,
       },
       headStyles: {
-        fillColor: [30, 77, 59],
+        fillColor: theme.pdfAccentRgb,
         textColor: [255, 255, 255],
         fontStyle: 'bold',
       },
       alternateRowStyles: {
-        fillColor: [248, 251, 249],
+        fillColor: theme.pdfAltRowRgb,
       },
       columnStyles: {
         0: { cellWidth: 30 },
@@ -412,9 +452,15 @@ export function exportAuditReportPdf(report: AuditReportData): void {
     y = getLastAutoTableY(doc, y) + 10;
   }
 
-  // Section 5: SonicOS CLI Remediation Script
+  // Section 5: CLI Remediation Script
   const sectionIdx = report.criticalEvents.length > 0 ? 5 : 4;
-  y = drawSectionHeading(doc, `${sectionIdx}. Script SonicOS CLI (Desabilitacao Segura)`, y);
+  y = drawSectionHeading(
+    doc,
+    `${sectionIdx}. Script ${theme.cliName} (Desabilitacao Segura)`,
+    y,
+    theme.pdfHeadingRgb,
+    theme.pdfBorderRgb
+  );
 
   const scriptLines = doc.splitTextToSize(report.cliDisableScript, pageWidth - 36) as string[];
   const lineHeight = 4.2;
@@ -427,11 +473,11 @@ export function exportAuditReportPdf(report: AuditReportData): void {
     const chunk = scriptLines.slice(lineCursor, lineCursor + maxLinesHere);
     const boxHeight = chunk.length * lineHeight + 6;
 
-    doc.setFillColor(14, 34, 26);
+    doc.setFillColor(...theme.pdfTerminalRgb);
     doc.roundedRect(14, y, pageWidth - 28, boxHeight, 1.5, 1.5, 'F');
     doc.setFont('courier', 'normal');
     doc.setFontSize(7.8);
-    doc.setTextColor(230, 242, 235);
+    doc.setTextColor(236, 244, 252);
 
     chunk.forEach((line, idx) => {
       doc.text(line, 18, y + 5 + idx * lineHeight);
@@ -452,11 +498,11 @@ export function exportAuditReportPdf(report: AuditReportData): void {
     doc.setPage(p);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
-    doc.setTextColor(92, 122, 107);
-    doc.text('SonicAudit · Auditoria de Syslog, NAT e Firewall SonicWall', 14, pageHeight - 9);
+    doc.setTextColor(...theme.pdfMutedRgb);
+    doc.text(`FW Audit (${theme.label}) · Auditoria de Syslog, NAT e Firewall`, 14, pageHeight - 9);
     doc.text(`Pagina ${p} de ${totalPages}`, pageWidth - 14, pageHeight - 9, { align: 'right' });
   }
 
   const stamp = new Date().toISOString().slice(0, 10);
-  doc.save(`relatorio-auditoria-sonicwall-${stamp}.pdf`);
+  doc.save(`fwaudit-relatorio-${theme.vendor}-${stamp}.pdf`);
 }

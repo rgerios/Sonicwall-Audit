@@ -38,51 +38,51 @@ export function LoginView({ needsSetup, onAuthenticated }: LoginViewProps) {
         onAuthenticated(data.username || username.trim());
       }
     } catch {
-      setError('Erro de comunicação com o servidor SonicAudit.');
+      setError('Erro de comunicação com o servidor FW Audit.');
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-[#F4F8F5] text-[#162820] flex items-center justify-center p-6">
-      <div className="w-full max-w-md bg-white border border-[#D4E4D8] rounded-lg overflow-hidden">
-        <div className="bg-[#EDF5EF] border-b border-[#D4E4D8] px-6 py-5 flex items-center gap-3">
-          <div className="w-9 h-9 rounded-md bg-[#1E4D3B] text-white flex items-center justify-center shrink-0">
+    <div className="min-h-screen bg-[var(--fw-bg)] text-[var(--fw-text)] flex items-center justify-center p-6">
+      <div className="w-full max-w-md bg-white border border-[var(--fw-border)] rounded-lg overflow-hidden">
+        <div className="bg-[var(--fw-surface)] border-b border-[var(--fw-border)] px-6 py-5 flex items-center gap-3">
+          <div className="w-9 h-9 rounded-md bg-[var(--fw-accent)] text-white flex items-center justify-center shrink-0">
             <Terminal className="w-5 h-5" aria-hidden="true" />
           </div>
           <div>
-            <h1 className="text-base font-bold tracking-tight text-[#123325]">SonicAudit</h1>
-            <p className="text-xs text-[#4B6B5C]">
-              Auditoria SonicWall Multi-Localidade & Syslog Linux
+            <h1 className="text-base font-bold tracking-tight text-[var(--fw-heading)]">FW Audit</h1>
+            <p className="text-xs text-[var(--fw-text-muted)]">
+              Auditoria SonicWall &amp; FortiGate · Syslog &amp; PostgreSQL
             </p>
           </div>
         </div>
 
         <form onSubmit={(e) => void handleSubmit(e)} className="p-6 space-y-4">
           <div className="space-y-1">
-            <h2 className="text-sm font-semibold text-[#123325] flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-[var(--fw-heading)] flex items-center gap-2">
               {needsSetup ? (
                 <>
-                  <UserPlus className="w-4 h-4 text-[#1E4D3B]" />
+                  <UserPlus className="w-4 h-4 text-[var(--fw-accent)]" />
                   Criar Acesso Administrativo Inicial
                 </>
               ) : (
                 <>
-                  <Lock className="w-4 h-4 text-[#1E4D3B]" />
+                  <Lock className="w-4 h-4 text-[var(--fw-accent)]" />
                   Acesso Protegido
                 </>
               )}
             </h2>
-            <p className="text-xs text-[#456354] leading-relaxed">
+            <p className="text-xs text-[var(--fw-text-muted)] leading-relaxed">
               {needsSetup
-                ? 'Defina o usuário e a senha que protegerão seus firewalls, credenciais salvas e syslogs persistidos neste servidor Linux.'
-                : 'Informe suas credenciais para acessar os firewalls, syslogs e relatórios persistidos.'}
+                ? 'Defina o usuário e a senha únicos que protegerão os ambientes SonicWall e FortiGate neste servidor.'
+                : 'Informe suas credenciais para acessar os firewalls SonicWall, FortiGate e relatórios persistidos.'}
             </p>
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-[#1D3B2E] mb-1">Usuário</label>
+            <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">Usuário</label>
             <input
               type="text"
               value={username}
@@ -91,12 +91,12 @@ export function LoginView({ needsSetup, onAuthenticated }: LoginViewProps) {
               minLength={3}
               autoComplete="username"
               placeholder="admin"
-              className="w-full px-3 py-2 text-xs font-mono border border-[#BFD5C5] rounded-md bg-[#F9FCFA] focus:outline-none focus:ring-2 focus:ring-[#2A6B52]"
+              className="w-full px-3 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-[#1D3B2E] mb-1">Senha</label>
+            <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">Senha</label>
             <div className="relative">
               <input
                 type={showPassword ? 'text' : 'password'}
@@ -106,13 +106,13 @@ export function LoginView({ needsSetup, onAuthenticated }: LoginViewProps) {
                 minLength={6}
                 autoComplete={needsSetup ? 'new-password' : 'current-password'}
                 placeholder="••••••••"
-                className="w-full px-3 py-2 pr-9 text-xs border border-[#BFD5C5] rounded-md bg-[#F9FCFA] focus:outline-none focus:ring-2 focus:ring-[#2A6B52]"
+                className="w-full px-3 py-2 pr-9 text-xs border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
               />
               <button
                 type="button"
                 onClick={() => setShowPassword((v) => !v)}
                 aria-label={showPassword ? 'Ocultar senha' : 'Mostrar senha'}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#5C7A6B] hover:text-[#123325]"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--fw-text-subtle)] hover:text-[var(--fw-heading)]"
               >
                 {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
               </button>
@@ -121,7 +121,7 @@ export function LoginView({ needsSetup, onAuthenticated }: LoginViewProps) {
 
           {needsSetup && (
             <div>
-              <label className="block text-xs font-medium text-[#1D3B2E] mb-1">
+              <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">
                 Confirmar Senha
               </label>
               <input
@@ -132,7 +132,7 @@ export function LoginView({ needsSetup, onAuthenticated }: LoginViewProps) {
                 minLength={6}
                 autoComplete="new-password"
                 placeholder="••••••••"
-                className="w-full px-3 py-2 text-xs border border-[#BFD5C5] rounded-md bg-[#F9FCFA] focus:outline-none focus:ring-2 focus:ring-[#2A6B52]"
+                className="w-full px-3 py-2 text-xs border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
               />
             </div>
           )}
@@ -146,7 +146,7 @@ export function LoginView({ needsSetup, onAuthenticated }: LoginViewProps) {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C] disabled:opacity-50 transition-colors"
+            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-50 transition-colors"
           >
             <ShieldCheck className="w-4 h-4" />
             {submitting
@@ -156,8 +156,8 @@ export function LoginView({ needsSetup, onAuthenticated }: LoginViewProps) {
                 : 'Entrar no Painel'}
           </button>
 
-          <p className="text-[11px] text-[#5C7A6B] text-center pt-1">
-            Sessão protegida via cookie HttpOnly · Credenciais armazenadas localmente com scrypt + AES-256-GCM
+          <p className="text-[11px] text-[var(--fw-text-subtle)] text-center pt-1">
+            Sessão única via cookie HttpOnly · Credenciais criptografadas com scrypt + AES-256-GCM
           </p>
         </form>
       </div>

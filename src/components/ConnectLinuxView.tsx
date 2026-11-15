@@ -17,47 +17,87 @@ import {
   Square,
   Trash2,
 } from 'lucide-react';
-import type { AuditOverview, FirewallSiteSummary, RetentionStatus, UdpListenerStatus } from '../types.ts';
+import type {
+  AuditOverview,
+  FirewallSiteSummary,
+  FirewallVendor,
+  RetentionStatus,
+  UdpListenerStatus,
+} from '../types.ts';
+import { vendorApiUrl } from '../utils/vendorApi.ts';
+import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
 
 interface ConnectLinuxViewProps {
+  vendor: FirewallVendor;
   overview: AuditOverview | null;
   onDataChanged: () => void;
   onOverviewUpdated: (next: AuditOverview) => void;
 }
 
-const RSYSLOG_SNIPPET = `# /etc/rsyslog.d/30-sonicwall.conf
-# Encaminha logs do SonicWall para o SonicAudit e mantém rotação segura no Linux
+function getRsyslogSnippet(vendor: FirewallVendor, udpPort: number): string {
+  if (vendor === 'fortigate') {
+    return `# /etc/rsyslog.d/31-fortigate.conf
+# Encaminha logs FortiOS para o container/serviço FW Audit FortiGate (porta UDP ${udpPort})
+module(load="imudp")
+input(type="imudp" port="514")
+
+if ($msg contains 'devname=' or $msg contains 'logid=') then {
+  action(type="omfile" file="/var/log/fortigate.log")
+  action(type="omfwd" target="127.0.0.1" port="${udpPort}" protocol="udp")
+  stop
+}`;
+  }
+  return `# /etc/rsyslog.d/30-sonicwall.conf
+# Encaminha logs SonicWall para o container/serviço FW Audit SonicWall (porta UDP ${udpPort})
 module(load="imudp")
 input(type="imudp" port="514")
 
 if ($fromhost-ip == '192.168.10.1' or $msg contains 'id=firewall') then {
   action(type="omfile" file="/var/log/sonicwall.log")
-  action(type="omfwd" target="127.0.0.1" port="5514" protocol="udp")
+  action(type="omfwd" target="127.0.0.1" port="${udpPort}" protocol="udp")
   stop
 }`;
+}
 
-const SYSTEMD_SNIPPET = `# /etc/systemd/system/sonicaudit.service
-[Unit]
-Description=SonicAudit — Analisador SonicWall Syslog, NAT e Firewall
-After=network-online.target
+function getComposeSnippet(vendor: FirewallVendor): string {
+  if (vendor === 'fortigate') {
+    return `# Serviço isolado no docker-compose.yml (Ubuntu Server)
+backend-fortigate:
+  build:
+    context: .
+    dockerfile: Dockerfile.backend
+  environment:
+    FW_VENDOR: fortigate
+    PORT: 3001
+    SYSLOG_UDP_PORT: 5515
+    SYSLOG_AUTOSTART: "true"
+    DATABASE_URL: postgres://fwaudit:SENHA@db:5432/fwaudit
+  ports:
+    - "5515:5515/udp"`;
+  }
+  return `# Serviço isolado no docker-compose.yml (Ubuntu Server)
+backend-sonicwall:
+  build:
+    context: .
+    dockerfile: Dockerfile.backend
+  environment:
+    FW_VENDOR: sonicwall
+    PORT: 3000
+    SYSLOG_UDP_PORT: 5514
+    SYSLOG_AUTOSTART: "true"
+    DATABASE_URL: postgres://fwaudit:SENHA@db:5432/fwaudit
+  ports:
+    - "5514:5514/udp"`;
+}
 
-[Service]
-Type=simple
-User=sonicaudit
-WorkingDirectory=/opt/sonicaudit
-Environment=NODE_ENV=production
-Environment=PORT=3000
-ExecStart=/usr/bin/node /opt/sonicaudit/server.ts
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target`;
-
-const CURL_INGEST_SNIPPET = `# Enviar arquivo de syslog histórico do Linux diretamente para a API local:
-curl -X POST http://localhost:3000/api/syslogs/ingest \\
+function getCurlIngestSnippet(vendor: FirewallVendor): string {
+  const logPath = vendor === 'fortigate' ? '/var/log/fortigate.log' : '/var/log/sonicwall.log';
+  return `# Enviar arquivo de syslog histórico do Linux para o ambiente ${vendor}:
+curl -X POST http://localhost:8080/api/${vendor}/syslogs/ingest \\
+  -b cookies.txt \\
   -H "Content-Type: text/plain" \\
-  --data-binary @/var/log/sonicwall.log`;
+  --data-binary @${logPath}`;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -66,10 +106,14 @@ function formatBytes(bytes: number): string {
 }
 
 export function ConnectLinuxView({
+  vendor,
   overview,
   onDataChanged,
   onOverviewUpdated,
 }: ConnectLinuxViewProps) {
+  const theme = VENDOR_THEMES[vendor];
+  const isForti = vendor === 'fortigate';
+  const defaultHost = isForti ? '192.168.10.2' : '192.168.10.1';
   const activeSite = overview?.activeSite;
   const sites = overview?.sites ?? [];
 
@@ -82,7 +126,8 @@ export function ConnectLinuxView({
   const [siteHost, setSiteHost] = useState('');
   const [sitePort, setSitePort] = useState('443');
   const [siteProtocol, setSiteProtocol] = useState<'https' | 'http'>('https');
-  const [siteUsername, setSiteUsername] = useState('admin');
+  const [siteUsername, setSiteUsername] = useState(isForti ? 'api-readonly' : 'admin');
+  const [siteVdom, setSiteVdom] = useState('root');
   const [sitePassword, setSitePassword] = useState('');
   const [siteSavePass, setSiteSavePass] = useState(true);
   const [siteIgnoreTls, setSiteIgnoreTls] = useState(true);
@@ -90,18 +135,19 @@ export function ConnectLinuxView({
   const [syncingSiteId, setSyncingSiteId] = useState<string | null>(null);
   const [siteFeedback, setSiteFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
-  // Active site SonicOS API connection form
-  const [host, setHost] = useState('192.168.10.1');
+  // Active site API connection form
+  const [host, setHost] = useState(defaultHost);
   const [port, setPort] = useState('443');
   const [protocol, setProtocol] = useState<'https' | 'http'>('https');
-  const [username, setUsername] = useState('admin');
+  const [username, setUsername] = useState(isForti ? 'api-readonly' : 'admin');
+  const [vdom, setVdom] = useState('root');
   const [password, setPassword] = useState('');
   const [savePassword, setSavePassword] = useState(true);
   const [ignoreTlsErrors, setIgnoreTlsErrors] = useState(true);
   const [apiLoading, setApiLoading] = useState(false);
   const [apiFeedback, setApiFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
-  const [udpPort, setUdpPort] = useState('5514');
+  const [udpPort, setUdpPort] = useState(String(theme.defaultUdpPort));
   const [udpStatus, setUdpStatus] = useState<UdpListenerStatus | null>(null);
   const [udpBusy, setUdpBusy] = useState(false);
   const [udpFeedback, setUdpFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
@@ -122,11 +168,23 @@ export function ConnectLinuxView({
   const [copiedBlock, setCopiedBlock] = useState<string | null>(null);
 
   useEffect(() => {
+    setShowSiteForm(false);
+    setEditingSiteId(null);
+    setSiteFeedback(null);
+    setApiFeedback(null);
+    setUdpFeedback(null);
+    setRetentionFeedback(null);
+    setConfigFeedback(null);
+    setUdpPort(String(theme.defaultUdpPort));
+  }, [vendor, theme.defaultUdpPort]);
+
+  useEffect(() => {
     if (activeSite) {
-      setHost(activeSite.connection.host || '192.168.10.1');
+      setHost(activeSite.connection.host || defaultHost);
       setPort(String(activeSite.connection.port || 443));
       setProtocol(activeSite.connection.protocol === 'http' ? 'http' : 'https');
-      setUsername(activeSite.connection.username || 'admin');
+      setUsername(activeSite.connection.username || (isForti ? 'api-readonly' : 'admin'));
+      setVdom(activeSite.connection.vdom || 'root');
       setIgnoreTlsErrors(activeSite.connection.ignoreTlsErrors !== false);
       setPassword('');
     }
@@ -136,18 +194,21 @@ export function ConnectLinuxView({
     activeSite?.connection.port,
     activeSite?.connection.protocol,
     activeSite?.connection.username,
+    activeSite?.connection.vdom,
     activeSite?.connection.ignoreTlsErrors,
+    defaultHost,
+    isForti,
   ]);
 
   const loadStatuses = async () => {
     const [udpRes, retRes] = await Promise.all([
-      fetch('/api/syslog-server/status'),
-      fetch('/api/retention'),
+      fetch(vendorApiUrl(vendor, '/syslog-server/status')),
+      fetch(vendorApiUrl(vendor, '/retention')),
     ]);
     if (udpRes.ok) {
       const status = (await udpRes.json()) as UdpListenerStatus;
       setUdpStatus(status);
-      setUdpPort(String(status.port));
+      setUdpPort(String(status.port || theme.defaultUdpPort));
     }
     if (retRes.ok) {
       const ret = (await retRes.json()) as RetentionStatus;
@@ -158,7 +219,7 @@ export function ConnectLinuxView({
 
   useEffect(() => {
     void loadStatuses();
-  }, [activeSite?.id]);
+  }, [vendor, activeSite?.id]);
 
   const openNewSiteForm = () => {
     setEditingSiteId(null);
@@ -168,7 +229,8 @@ export function ConnectLinuxView({
     setSiteHost('');
     setSitePort('443');
     setSiteProtocol('https');
-    setSiteUsername('admin');
+    setSiteUsername(isForti ? 'api-readonly' : 'admin');
+    setSiteVdom('root');
     setSitePassword('');
     setSiteSavePass(true);
     setSiteIgnoreTls(true);
@@ -184,7 +246,8 @@ export function ConnectLinuxView({
     setSiteHost(site.connection.host);
     setSitePort(String(site.connection.port || 443));
     setSiteProtocol(site.connection.protocol === 'http' ? 'http' : 'https');
-    setSiteUsername(site.connection.username || 'admin');
+    setSiteUsername(site.connection.username || (isForti ? 'api-readonly' : 'admin'));
+    setSiteVdom(site.connection.vdom || 'root');
     setSitePassword('');
     setSiteSavePass(site.connection.hasSavedPassword);
     setSiteIgnoreTls(site.connection.ignoreTlsErrors);
@@ -206,14 +269,17 @@ export function ConnectLinuxView({
           host: siteHost.trim(),
           port: Number(sitePort) || 443,
           protocol: siteProtocol,
-          username: siteUsername.trim() || 'admin',
+          username: siteUsername.trim() || (isForti ? 'api-readonly' : 'admin'),
+          vdom: isForti ? siteVdom.trim() || 'root' : undefined,
           password: sitePassword,
           savePassword: siteSavePass,
           ignoreTlsErrors: siteIgnoreTls,
         },
       };
 
-      const url = editingSiteId ? `/api/sites/${editingSiteId}` : '/api/sites';
+      const url = editingSiteId
+        ? vendorApiUrl(vendor, `/sites/${editingSiteId}`)
+        : vendorApiUrl(vendor, '/sites');
       const method = editingSiteId ? 'PUT' : 'POST';
       const res = await fetch(url, {
         method,
@@ -230,8 +296,8 @@ export function ConnectLinuxView({
         setSiteFeedback({
           type: 'ok',
           text: editingSiteId
-            ? 'Localidade atualizada com persistência no servidor.'
-            : `Localidade "${payload.name}" criada e selecionada.`,
+            ? 'Localidade atualizada com persistência no banco.'
+            : `Localidade "${payload.name}" criada e selecionada no ambiente ${theme.label}.`,
         });
         onDataChanged();
       }
@@ -242,7 +308,7 @@ export function ConnectLinuxView({
 
   const handleSelectSite = async (siteId: string) => {
     setSiteFeedback(null);
-    const res = await fetch(`/api/sites/${siteId}/select`, { method: 'POST' });
+    const res = await fetch(vendorApiUrl(vendor, `/sites/${siteId}/select`), { method: 'POST' });
     const data = await res.json();
     if (res.ok) {
       if (data.overview) onOverviewUpdated(data.overview);
@@ -254,7 +320,7 @@ export function ConnectLinuxView({
     setSyncingSiteId(siteId);
     setSiteFeedback(null);
     try {
-      const res = await fetch(`/api/sites/${siteId}/sync`, {
+      const res = await fetch(vendorApiUrl(vendor, `/sites/${siteId}/sync`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
@@ -266,7 +332,7 @@ export function ConnectLinuxView({
         if (data.overview) onOverviewUpdated(data.overview);
         setSiteFeedback({
           type: 'ok',
-          text: `Localidade sincronizada via API SonicOS (${data.rulesCount} regras, ${data.natsCount} NATs).`,
+          text: `Localidade sincronizada via API ${isForti ? 'FortiOS' : 'SonicOS'} (${data.rulesCount} regras, ${data.natsCount} NATs).`,
         });
         onDataChanged();
       }
@@ -277,7 +343,7 @@ export function ConnectLinuxView({
 
   const handleDeleteSite = async (site: FirewallSiteSummary) => {
     setSiteFeedback(null);
-    const res = await fetch(`/api/sites/${site.id}`, { method: 'DELETE' });
+    const res = await fetch(vendorApiUrl(vendor, `/sites/${site.id}`), { method: 'DELETE' });
     const data = await res.json();
     if (!res.ok) {
       setSiteFeedback({ type: 'err', text: data.error || 'Não foi possível excluir localidade.' });
@@ -288,12 +354,12 @@ export function ConnectLinuxView({
     }
   };
 
-  const handleSonicOsAudit = async (e: React.FormEvent) => {
+  const handleFirewallApiAudit = async (e: React.FormEvent) => {
     e.preventDefault();
     setApiLoading(true);
     setApiFeedback(null);
     try {
-      const res = await fetch('/api/sonicwall/audit', {
+      const res = await fetch(vendorApiUrl(vendor, '/firewall/audit'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -302,6 +368,7 @@ export function ConnectLinuxView({
           port: Number(port),
           protocol,
           username,
+          vdom: isForti ? vdom.trim() || 'root' : undefined,
           password,
           savePassword,
           ignoreTlsErrors,
@@ -309,13 +376,16 @@ export function ConnectLinuxView({
       });
       const data = await res.json();
       if (!res.ok) {
-        setApiFeedback({ type: 'err', text: data.error || 'Falha na conexão com o SonicWall.' });
+        setApiFeedback({
+          type: 'err',
+          text: data.error || `Falha na conexão com o ${theme.label}.`,
+        });
       } else {
         if (data.overview) onOverviewUpdated(data.overview);
         setPassword('');
         setApiFeedback({
           type: 'ok',
-          text: `Sincronizado com sucesso e salvo na localidade ativa: ${data.rulesCount} regras e ${data.natsCount} políticas NAT.`,
+          text: `Sincronizado com sucesso (${theme.label}): ${data.rulesCount} regras e ${data.natsCount} políticas NAT/VIP.`,
         });
         onDataChanged();
       }
@@ -333,11 +403,11 @@ export function ConnectLinuxView({
     setUdpBusy(true);
     setUdpFeedback(null);
     try {
-      const endpoint = udpStatus?.running ? '/api/syslog-server/stop' : '/api/syslog-server/start';
-      const res = await fetch(endpoint, {
+      const endpoint = udpStatus?.running ? '/syslog-server/stop' : '/syslog-server/start';
+      const res = await fetch(vendorApiUrl(vendor, endpoint), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ port: Number(udpPort) || 5514 }),
+        body: JSON.stringify({ port: Number(udpPort) || theme.defaultUdpPort }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -347,8 +417,8 @@ export function ConnectLinuxView({
         setUdpFeedback({
           type: 'ok',
           text: data.running
-            ? `Receptor UDP ativo na porta ${data.port}. Syslogs recebidos são roteados pelo Serial/IP para cada localidade.`
-            : 'Receptor UDP encerrado.',
+            ? `Receptor UDP ${theme.label} ativo na porta ${data.port}. Syslogs recebidos são roteados por Serial/IP para cada localidade.`
+            : `Receptor UDP ${theme.label} encerrado.`,
         });
         onDataChanged();
       }
@@ -361,7 +431,9 @@ export function ConnectLinuxView({
     setUdpBusy(true);
     setUdpFeedback(null);
     try {
-      const res = await fetch('/api/syslog-server/test-packet', { method: 'POST' });
+      const res = await fetch(vendorApiUrl(vendor, '/syslog-server/test-packet'), {
+        method: 'POST',
+      });
       const data = await res.json();
       if (!res.ok) {
         setUdpFeedback({ type: 'err', text: data.error || 'Falha no envio de pacote teste.' });
@@ -369,7 +441,7 @@ export function ConnectLinuxView({
         setUdpStatus(data.status);
         setUdpFeedback({
           type: 'ok',
-          text: 'Pacote UDP SonicWall recebido e processado pelo socket local.',
+          text: `Pacote UDP ${theme.label} recebido e processado na porta ${data.status?.port || theme.defaultUdpPort}.`,
         });
         onDataChanged();
         await loadStatuses();
@@ -384,7 +456,7 @@ export function ConnectLinuxView({
     setRetentionFeedback(null);
     try {
       const days = Number.parseInt(retentionInput, 10);
-      const res = await fetch('/api/retention', {
+      const res = await fetch(vendorApiUrl(vendor, '/retention'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ retentionDays: days }),
@@ -409,7 +481,7 @@ export function ConnectLinuxView({
     setRetentionBusy(true);
     setRetentionFeedback(null);
     try {
-      const res = await fetch('/api/retention/purge', { method: 'POST' });
+      const res = await fetch(vendorApiUrl(vendor, '/retention/purge'), { method: 'POST' });
       const data = await res.json();
       if (res.ok) {
         setRetention(data.retention);
@@ -430,7 +502,7 @@ export function ConnectLinuxView({
     setConfigFeedback(null);
     try {
       const content = await file.text();
-      const res = await fetch('/api/config/import', {
+      const res = await fetch(vendorApiUrl(vendor, '/config/import'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, filename: file.name }),
@@ -459,7 +531,7 @@ export function ConnectLinuxView({
     setConfigFeedback(null);
     try {
       const content = await file.text();
-      const res = await fetch('/api/syslogs/ingest', {
+      const res = await fetch(vendorApiUrl(vendor, '/syslogs/ingest'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, source: 'upload' }),
@@ -481,7 +553,7 @@ export function ConnectLinuxView({
   };
 
   const handleClearAll = async () => {
-    await fetch('/api/data/clear', { method: 'POST' });
+    await fetch(vendorApiUrl(vendor, '/data/clear'), { method: 'POST' });
     setConfigFeedback({ type: 'ok', text: 'Os dados desta localidade foram limpos.' });
     onDataChanged();
     await loadStatuses();
@@ -497,43 +569,49 @@ export function ConnectLinuxView({
     }
   };
 
+  const rsyslogSnippet = getRsyslogSnippet(vendor, Number(udpPort) || theme.defaultUdpPort);
+  const composeSnippet = getComposeSnippet(vendor);
+  const curlSnippet = getCurlIngestSnippet(vendor);
+
   return (
     <div className="space-y-6">
-      <div className="bg-white border border-[#D4E4D8] rounded-lg p-6 space-y-4">
-        <div className="pb-3 border-b border-[#E6F0E8] flex flex-wrap items-center justify-between gap-4">
+      <div className="bg-white border border-[var(--fw-border)] rounded-lg p-6 space-y-4">
+        <div className="pb-3 border-b border-[var(--fw-border-soft)] flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h2 className="text-sm font-semibold text-[#123325] inline-flex items-center gap-2">
-              <Building2 className="w-4 h-4 text-[#1E4D3B]" />
-              Localidades e Firewalls Persistentes ({sites.length})
+            <h2 className="text-sm font-semibold text-[var(--fw-heading)] inline-flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-[var(--fw-accent)]" />
+              Localidades {theme.label} Persistentes ({sites.length})
             </h2>
-            <p className="text-xs text-[#4B6B5C] mt-1">
+            <p className="text-xs text-[var(--fw-text-muted)] mt-1">
               Cada localidade armazena separadamente suas credenciais criptografadas, regras, NATs,
-              telemetria e syslogs em disco no Linux.
+              telemetria e syslogs no PostgreSQL com isolamento por vendor ({vendor}).
             </p>
           </div>
           <button
             type="button"
             onClick={openNewSiteForm}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C] whitespace-nowrap"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] whitespace-nowrap"
           >
             <Plus className="w-3.5 h-3.5" />
-            Nova Localidade
+            Nova Localidade {theme.label}
           </button>
         </div>
 
         {showSiteForm && (
           <form
             onSubmit={(e) => void handleSaveSite(e)}
-            className="p-4 bg-[#F4F8F5] border border-[#BFD5C5] rounded-md space-y-4"
+            className="p-4 bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded-md space-y-4"
           >
-            <div className="flex items-center justify-between border-b border-[#DCE9E0] pb-2">
-              <span className="text-xs font-semibold text-[#123325]">
-                {editingSiteId ? 'Editar Localidade / Firewall' : 'Cadastrar Nova Localidade'}
+            <div className="flex items-center justify-between border-b border-[var(--fw-border)] pb-2">
+              <span className="text-xs font-semibold text-[var(--fw-heading)]">
+                {editingSiteId
+                  ? `Editar Localidade ${theme.label}`
+                  : `Cadastrar Nova Localidade ${theme.label}`}
               </span>
               <button
                 type="button"
                 onClick={() => setShowSiteForm(false)}
-                className="text-xs text-[#4B6B5C] hover:underline"
+                className="text-xs text-[var(--fw-text-muted)] hover:underline"
               >
                 Cancelar
               </button>
@@ -541,56 +619,66 @@ export function ConnectLinuxView({
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
               <div>
-                <label className="block font-medium text-[#1D3B2E] mb-1">Nome da Localidade</label>
+                <label className="block font-medium text-[var(--fw-text-body)] mb-1">
+                  Nome da Localidade
+                </label>
                 <input
                   type="text"
                   value={siteName}
                   onChange={(e) => setSiteName(e.target.value)}
                   required
-                  placeholder="Ex: Filial Campinas"
-                  className="w-full px-3 py-2 border border-[#BFD5C5] rounded bg-white"
+                  placeholder={isForti ? 'Ex: Matriz FortiGate 100F' : 'Ex: Filial Campinas'}
+                  className="w-full px-3 py-2 border border-[var(--fw-border-strong)] rounded bg-white"
                 />
               </div>
               <div>
-                <label className="block font-medium text-[#1D3B2E] mb-1">Cidade / Unidade</label>
+                <label className="block font-medium text-[var(--fw-text-body)] mb-1">
+                  Cidade / Unidade
+                </label>
                 <input
                   type="text"
                   value={siteLocation}
                   onChange={(e) => setSiteLocation(e.target.value)}
                   placeholder="Ex: Campinas / SP"
-                  className="w-full px-3 py-2 border border-[#BFD5C5] rounded bg-white"
+                  className="w-full px-3 py-2 border border-[var(--fw-border-strong)] rounded bg-white"
                 />
               </div>
               <div>
-                <label className="block font-medium text-[#1D3B2E] mb-1">Observações</label>
+                <label className="block font-medium text-[var(--fw-text-body)] mb-1">
+                  Observações
+                </label>
                 <input
                   type="text"
                   value={siteNotes}
                   onChange={(e) => setSiteNotes(e.target.value)}
                   placeholder="Ex: Link Vivo + Backup Claro"
-                  className="w-full px-3 py-2 border border-[#BFD5C5] rounded bg-white"
+                  className="w-full px-3 py-2 border border-[var(--fw-border-strong)] rounded bg-white"
                 />
               </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-5 gap-3 text-xs">
               <div className="md:col-span-2">
-                <label className="block font-medium text-[#1D3B2E] mb-1">IP / Hostname SonicOS</label>
+                <label className="block font-medium text-[var(--fw-text-body)] mb-1">
+                  IP / Hostname {isForti ? 'FortiOS' : 'SonicOS'}
+                </label>
                 <input
                   type="text"
                   value={siteHost}
                   onChange={(e) => setSiteHost(e.target.value)}
-                  placeholder="10.20.0.1"
-                  className="w-full px-3 py-2 font-mono border border-[#BFD5C5] rounded bg-white"
+                  placeholder={defaultHost}
+                  className="w-full px-3 py-2 font-mono border border-[var(--fw-border-strong)] rounded bg-white"
                 />
               </div>
               <div>
-                <label className="block font-medium text-[#1D3B2E] mb-1">Proto / Porta</label>
+                <label className="block font-medium text-[var(--fw-text-body)] mb-1">
+                  Proto / Porta
+                </label>
                 <div className="flex gap-1">
                   <select
                     value={siteProtocol}
                     onChange={(e) => setSiteProtocol(e.target.value === 'http' ? 'http' : 'https')}
-                    className="px-2 py-2 font-mono border border-[#BFD5C5] rounded bg-white"
+                    className="px-2 py-2 font-mono border border-[var(--fw-border-strong)] rounded bg-white"
                   >
                     <option value="https">HTTPS</option>
                     <option value="http">HTTP</option>
@@ -599,48 +687,65 @@ export function ConnectLinuxView({
                     type="number"
                     value={sitePort}
                     onChange={(e) => setSitePort(e.target.value)}
-                    className="w-full px-2 py-2 font-mono border border-[#BFD5C5] rounded bg-white"
+                    className="w-full px-2 py-2 font-mono border border-[var(--fw-border-strong)] rounded bg-white"
                   />
                 </div>
               </div>
+              {isForti ? (
+                <div>
+                  <label className="block font-medium text-[var(--fw-text-body)] mb-1">VDOM</label>
+                  <input
+                    type="text"
+                    value={siteVdom}
+                    onChange={(e) => setSiteVdom(e.target.value)}
+                    placeholder="root"
+                    className="w-full px-3 py-2 font-mono border border-[var(--fw-border-strong)] rounded bg-white"
+                  />
+                </div>
+              ) : (
+                <div>
+                  <label className="block font-medium text-[var(--fw-text-body)] mb-1">
+                    Usuário API
+                  </label>
+                  <input
+                    type="text"
+                    value={siteUsername}
+                    onChange={(e) => setSiteUsername(e.target.value)}
+                    className="w-full px-3 py-2 font-mono border border-[var(--fw-border-strong)] rounded bg-white"
+                  />
+                </div>
+              )}
               <div>
-                <label className="block font-medium text-[#1D3B2E] mb-1">Usuário API</label>
-                <input
-                  type="text"
-                  value={siteUsername}
-                  onChange={(e) => setSiteUsername(e.target.value)}
-                  className="w-full px-3 py-2 font-mono border border-[#BFD5C5] rounded bg-white"
-                />
-              </div>
-              <div>
-                <label className="block font-medium text-[#1D3B2E] mb-1">Senha API</label>
+                <label className="block font-medium text-[var(--fw-text-body)] mb-1">
+                  {isForti ? 'Bearer API Token' : 'Senha API'}
+                </label>
                 <input
                   type="password"
                   value={sitePassword}
                   onChange={(e) => setSitePassword(e.target.value)}
                   placeholder={editingSiteId ? '(Manter atual)' : '••••••••'}
-                  className="w-full px-3 py-2 border border-[#BFD5C5] rounded bg-white"
+                  className="w-full px-3 py-2 font-mono border border-[var(--fw-border-strong)] rounded bg-white"
                 />
               </div>
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-4 text-xs pt-1">
               <div className="flex flex-wrap items-center gap-4">
-                <label className="inline-flex items-center gap-2 text-[#1D3B2E] cursor-pointer">
+                <label className="inline-flex items-center gap-2 text-[var(--fw-text-body)] cursor-pointer">
                   <input
                     type="checkbox"
                     checked={siteSavePass}
                     onChange={(e) => setSiteSavePass(e.target.checked)}
-                    className="rounded border-[#9EC2AA] accent-[#1E4D3B]"
+                    className="rounded border-[var(--fw-border-strong)] accent-[var(--fw-accent)]"
                   />
-                  Salvar senha criptografada (AES-256) para re-sincronização rápida
+                  Salvar {isForti ? 'token' : 'senha'} criptografado(a) (AES-256) para re-sincronização rápida
                 </label>
-                <label className="inline-flex items-center gap-2 text-[#456354] cursor-pointer">
+                <label className="inline-flex items-center gap-2 text-[var(--fw-text-muted)] cursor-pointer">
                   <input
                     type="checkbox"
                     checked={siteIgnoreTls}
                     onChange={(e) => setSiteIgnoreTls(e.target.checked)}
-                    className="rounded border-[#9EC2AA] accent-[#1E4D3B]"
+                    className="rounded border-[var(--fw-border-strong)] accent-[var(--fw-accent)]"
                   />
                   Ignorar TLS autoassinado
                 </label>
@@ -648,7 +753,7 @@ export function ConnectLinuxView({
               <button
                 type="submit"
                 disabled={siteBusy}
-                className="px-4 py-2 text-xs font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C] disabled:opacity-50"
+                className="px-4 py-2 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-50"
               >
                 {siteBusy ? 'Salvando...' : editingSiteId ? 'Salvar Alterações' : 'Criar Localidade'}
               </button>
@@ -660,7 +765,7 @@ export function ConnectLinuxView({
           <div
             className={`p-3 rounded-md border text-xs ${
               siteFeedback.type === 'ok'
-                ? 'bg-[#E7F2EA] border-[#B6D4BE] text-[#143D2C]'
+                ? 'bg-[var(--fw-surface)] border-[var(--fw-border-strong)] text-[var(--fw-heading)]'
                 : 'bg-red-50 border-red-200 text-red-800'
             }`}
           >
@@ -668,62 +773,72 @@ export function ConnectLinuxView({
           </div>
         )}
 
-        <div className="overflow-x-auto border border-[#D4E4D8] rounded-md">
+        <div className="overflow-x-auto border border-[var(--fw-border)] rounded-md">
           <table className="w-full text-xs">
             <thead>
-              <tr className="bg-[#EDF5EF] text-[#244838] border-b border-[#D4E4D8]">
+              <tr className="bg-[var(--fw-surface)] text-[var(--fw-text-body)] border-b border-[var(--fw-border)]">
                 <th className="py-2.5 px-3 text-left font-medium">Localidade</th>
                 <th className="py-2.5 px-3 text-left font-medium">Appliance / Serial</th>
-                <th className="py-2.5 px-3 text-left font-medium">Endpoint SonicOS</th>
+                <th className="py-2.5 px-3 text-left font-medium">
+                  Endpoint {isForti ? 'FortiOS' : 'SonicOS'}
+                </th>
                 <th className="py-2.5 px-3 text-right font-medium">Syslogs</th>
                 <th className="py-2.5 px-3 text-right font-medium">Regras / NATs</th>
                 <th className="py-2.5 px-3 text-right font-medium">Alertas</th>
                 <th className="py-2.5 px-3 text-right font-medium">Ações</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#E6F0E8]">
+            <tbody className="divide-y divide-[var(--fw-border-soft)]">
               {sites.map((site) => {
                 const isActive = site.id === activeSite?.id;
                 const canQuickSync = Boolean(site.connection.host && site.connection.hasSavedPassword);
                 return (
-                  <tr key={site.id} className={isActive ? 'bg-[#F4F8F5]' : 'bg-white'}>
+                  <tr key={site.id} className={isActive ? 'bg-[var(--fw-bg)]' : 'bg-white'}>
                     <td className="py-2.5 px-3">
                       <div className="flex items-center gap-2">
-                        <span className="font-semibold text-[#123325]">{site.name}</span>
+                        <span className="font-semibold text-[var(--fw-heading)]">{site.name}</span>
                         {isActive && (
                           <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-800">
                             <CheckCircle2 className="w-3.5 h-3.5" /> Ativa
                           </span>
                         )}
                       </div>
-                      <p className="text-[11px] text-[#5C7A6B]">
+                      <p className="text-[11px] text-[var(--fw-text-subtle)]">
                         {site.location || 'Sem unidade informada'}
                         {site.notes ? ` · ${site.notes}` : ''}
                       </p>
                     </td>
                     <td className="py-2.5 px-3">
-                      <p className="text-[#123325] font-medium truncate max-w-[190px]">
+                      <p className="text-[var(--fw-heading)] font-medium truncate max-w-[190px]">
                         {site.appliance.model}
                       </p>
-                      <p className="text-[11px] font-mono text-[#5C7A6B]">
+                      <p className="text-[11px] font-mono text-[var(--fw-text-subtle)]">
                         S/N: {site.appliance.serialNumber}
                       </p>
                     </td>
                     <td className="py-2.5 px-3">
-                      <p className="font-mono text-[#123325]">
+                      <p className="font-mono text-[var(--fw-heading)]">
                         {site.connection.host
-                          ? `${site.connection.protocol}://${site.connection.host}:${site.connection.port}`
+                          ? `${site.connection.protocol}://${site.connection.host}:${site.connection.port}${
+                              isForti && site.connection.vdom ? ` (${site.connection.vdom})` : ''
+                            }`
                           : 'Não configurado'}
                       </p>
-                      <p className="text-[11px] text-[#5C7A6B] inline-flex items-center gap-1">
+                      <p className="text-[11px] text-[var(--fw-text-subtle)] inline-flex items-center gap-1">
                         <Lock className="w-3 h-3" />
-                        {site.connection.hasSavedPassword ? 'Senha salva (AES-256)' : 'Sem senha salva'}
+                        {site.connection.hasSavedPassword
+                          ? isForti
+                            ? 'Token salvo (AES-256)'
+                            : 'Senha salva (AES-256)'
+                          : isForti
+                            ? 'Sem token salvo'
+                            : 'Sem senha salva'}
                       </p>
                     </td>
-                    <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#123325]">
+                    <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[var(--fw-heading)]">
                       {site.totalSyslogs.toLocaleString('pt-BR')}
                     </td>
-                    <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#456354]">
+                    <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[var(--fw-text-muted)]">
                       {site.rulesCount} / {site.natsCount}
                     </td>
                     <td className="py-2.5 px-3 text-right font-mono tabular-nums">
@@ -733,7 +848,7 @@ export function ConnectLinuxView({
                             ? 'text-red-700 font-semibold'
                             : site.alertsCount > 0
                               ? 'text-amber-800 font-semibold'
-                              : 'text-[#5C7A6B]'
+                              : 'text-[var(--fw-text-subtle)]'
                         }
                       >
                         {site.alertsCount}
@@ -745,7 +860,7 @@ export function ConnectLinuxView({
                           <button
                             type="button"
                             onClick={() => void handleSelectSite(site.id)}
-                            className="px-2.5 py-1 text-[11px] font-medium text-[#1E4D3B] bg-white border border-[#BFD5C5] rounded hover:bg-[#EDF5EF]"
+                            className="px-2.5 py-1 text-[11px] font-medium text-[var(--fw-accent)] bg-white border border-[var(--fw-border-strong)] rounded hover:bg-[var(--fw-surface)]"
                           >
                             Selecionar
                           </button>
@@ -755,8 +870,8 @@ export function ConnectLinuxView({
                             type="button"
                             disabled={syncingSiteId === site.id}
                             onClick={() => void handleQuickSyncSite(site.id)}
-                            title="Sincronizar via API SonicOS usando senha salva"
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-white bg-[#1E4D3B] rounded hover:bg-[#163A2C] disabled:opacity-50"
+                            title={`Sincronizar via API ${isForti ? 'FortiOS' : 'SonicOS'}`}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-white bg-[var(--fw-accent)] rounded hover:bg-[var(--fw-accent-hover)] disabled:opacity-50"
                           >
                             <RefreshCw
                               className={`w-3 h-3 ${syncingSiteId === site.id ? 'animate-spin' : ''}`}
@@ -769,7 +884,7 @@ export function ConnectLinuxView({
                           onClick={() => openEditSiteForm(site)}
                           title="Editar localidade"
                           aria-label={`Editar ${site.name}`}
-                          className="p-1.5 text-[#4B6B5C] hover:text-[#123325] hover:bg-[#EDF5EF] rounded"
+                          className="p-1.5 text-[var(--fw-text-muted)] hover:text-[var(--fw-heading)] hover:bg-[var(--fw-surface)] rounded"
                         >
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
@@ -796,40 +911,44 @@ export function ConnectLinuxView({
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <form
-          onSubmit={handleSonicOsAudit}
-          className="bg-white border border-[#D4E4D8] rounded-lg p-6 space-y-4"
+          onSubmit={handleFirewallApiAudit}
+          className="bg-white border border-[var(--fw-border)] rounded-lg p-6 space-y-4"
         >
-          <div className="pb-3 border-b border-[#E6F0E8]">
-            <h2 className="text-sm font-semibold text-[#123325]">
-              Conexão Direta — API REST SonicOS ({activeSite?.name || 'Localidade Ativa'})
+          <div className="pb-3 border-b border-[var(--fw-border-soft)]">
+            <h2 className="text-sm font-semibold text-[var(--fw-heading)]">
+              Conexão Direta — API REST {isForti ? 'FortiOS v2' : 'SonicOS'} (
+              {activeSite?.name || 'Localidade Ativa'})
             </h2>
-            <p className="text-xs text-[#4B6B5C] mt-1">
-              Consulta diretamente regras, NATs, uptime, links e licenças do SonicWall desta
-              localidade e mantém os dados salvos no servidor.
+            <p className="text-xs text-[var(--fw-text-muted)] mt-1">
+              {isForti
+                ? 'Consulta políticas de firewall, hit counts, VIPs, IP Pools, interfaces, VPNs IPSec e licenças FortiGuard via REST API.'
+                : 'Consulta diretamente regras, NATs, uptime, links e licenças do SonicWall desta localidade e mantém os dados salvos no banco.'}
             </p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="sm:col-span-2">
-              <label className="block text-xs font-medium text-[#1D3B2E] mb-1">
-                IP ou Hostname do SonicWall
+              <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">
+                IP ou Hostname do {theme.label}
               </label>
               <input
                 type="text"
                 value={host}
                 onChange={(e) => setHost(e.target.value)}
                 required
-                placeholder="192.168.10.1"
-                className="w-full px-3 py-2 text-xs font-mono border border-[#BFD5C5] rounded-md focus:outline-none focus:ring-2 focus:ring-[#2A6B52]"
+                placeholder={defaultHost}
+                className="w-full px-3 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-[#1D3B2E] mb-1">Porta / Proto</label>
+              <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">
+                Porta / Proto
+              </label>
               <div className="flex gap-1.5">
                 <select
                   value={protocol}
                   onChange={(e) => setProtocol(e.target.value === 'http' ? 'http' : 'https')}
-                  className="px-2 py-2 text-xs font-mono border border-[#BFD5C5] rounded-md bg-white"
+                  className="px-2 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-white"
                 >
                   <option value="https">HTTPS</option>
                   <option value="http">HTTP</option>
@@ -838,60 +957,96 @@ export function ConnectLinuxView({
                   type="number"
                   value={port}
                   onChange={(e) => setPort(e.target.value)}
-                  className="w-full px-2.5 py-2 text-xs font-mono border border-[#BFD5C5] rounded-md"
+                  className="w-full px-2.5 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)]"
                 />
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-[#1D3B2E] mb-1">
-                Usuário Admin / Read-Only
-              </label>
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
-                className="w-full px-3 py-2 text-xs font-mono border border-[#BFD5C5] rounded-md focus:outline-none focus:ring-2 focus:ring-[#2A6B52]"
-              />
+          {isForti ? (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">
+                  VDOM FortiOS
+                </label>
+                <input
+                  type="text"
+                  value={vdom}
+                  onChange={(e) => setVdom(e.target.value)}
+                  placeholder="root"
+                  className="w-full px-3 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">
+                  API Token (REST API Admin Read-Only)
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required={!activeSite?.connection.hasSavedPassword}
+                  placeholder={
+                    activeSite?.connection.hasSavedPassword
+                      ? 'Token salvo (vazio = reutilizar)'
+                      : 'Cole o Bearer token gerado no FortiGate'
+                  }
+                  className="w-full px-3 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
+                />
+              </div>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-[#1D3B2E] mb-1">Senha</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required={!activeSite?.connection.hasSavedPassword}
-                placeholder={
-                  activeSite?.connection.hasSavedPassword
-                    ? 'Senha salva (vazio = reutilizar)'
-                    : '••••••••'
-                }
-                className="w-full px-3 py-2 text-xs border border-[#BFD5C5] rounded-md focus:outline-none focus:ring-2 focus:ring-[#2A6B52]"
-              />
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">
+                  Usuário Admin / Read-Only
+                </label>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  required
+                  className="w-full px-3 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">
+                  Senha
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required={!activeSite?.connection.hasSavedPassword}
+                  placeholder={
+                    activeSite?.connection.hasSavedPassword
+                      ? 'Senha salva (vazio = reutilizar)'
+                      : '••••••••'
+                  }
+                  className="w-full px-3 py-2 text-xs border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="space-y-2">
-            <label className="flex items-center gap-2 text-xs text-[#1D3B2E] cursor-pointer">
+            <label className="flex items-center gap-2 text-xs text-[var(--fw-text-body)] cursor-pointer">
               <input
                 type="checkbox"
                 checked={savePassword}
                 onChange={(e) => setSavePassword(e.target.checked)}
-                className="rounded border-[#9EC2AA] accent-[#1E4D3B]"
+                className="rounded border-[var(--fw-border-strong)] accent-[var(--fw-accent)]"
               />
               Salvar credenciais criptografadas (AES-256) nesta localidade
             </label>
-            <label className="flex items-center gap-2 text-xs text-[#456354] cursor-pointer">
+            <label className="flex items-center gap-2 text-xs text-[var(--fw-text-muted)] cursor-pointer">
               <input
                 type="checkbox"
                 checked={ignoreTlsErrors}
                 onChange={(e) => setIgnoreTlsErrors(e.target.checked)}
-                className="rounded border-[#9EC2AA] accent-[#1E4D3B]"
+                className="rounded border-[var(--fw-border-strong)] accent-[var(--fw-accent)]"
               />
-              Ignorar erro de certificado TLS autoassinado (comum em interfaces locais SonicOS)
+              Ignorar erro de certificado TLS autoassinado (comum em interfaces locais)
             </label>
           </div>
 
@@ -899,7 +1054,7 @@ export function ConnectLinuxView({
             <div
               className={`p-3 rounded-md border text-xs ${
                 apiFeedback.type === 'ok'
-                  ? 'bg-[#E7F2EA] border-[#B6D4BE] text-[#143D2C]'
+                  ? 'bg-[var(--fw-surface)] border-[var(--fw-border-strong)] text-[var(--fw-heading)]'
                   : 'bg-red-50 border-red-200 text-red-800'
               }`}
             >
@@ -908,13 +1063,15 @@ export function ConnectLinuxView({
           )}
 
           <div className="pt-1 flex items-center justify-between gap-3">
-            <span className="text-[11px] text-[#4B6B5C]">
-              Habilite em: Manage → System Setup → Appliance → SonicOS API
+            <span className="text-[11px] text-[var(--fw-text-muted)]">
+              {isForti
+                ? 'Habilite em: System → Administrators → Create New → REST API Admin'
+                : 'Habilite em: Manage → System Setup → Appliance → SonicOS API'}
             </span>
             <button
               type="submit"
               disabled={apiLoading}
-              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C] disabled:opacity-50 whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-50 whitespace-nowrap shrink-0"
             >
               <ShieldCheck className="w-3.5 h-3.5" />
               {apiLoading ? 'Auditando...' : 'Conectar e Auditar'}
@@ -923,34 +1080,36 @@ export function ConnectLinuxView({
         </form>
 
         <div className="space-y-6">
-          <div className="bg-white border border-[#D4E4D8] rounded-lg p-6 space-y-4">
-            <div className="pb-3 border-b border-[#E6F0E8] flex items-center justify-between">
+          <div className="bg-white border border-[var(--fw-border)] rounded-lg p-6 space-y-4">
+            <div className="pb-3 border-b border-[var(--fw-border-soft)] flex items-center justify-between">
               <div>
-                <h2 className="text-sm font-semibold text-[#123325]">
-                  Receptor UDP Syslog (Socket Linux)
+                <h2 className="text-sm font-semibold text-[var(--fw-heading)]">
+                  Receptor UDP Syslog {theme.label} (Socket Linux)
                 </h2>
-                <p className="text-xs text-[#4B6B5C] mt-1">
-                  Recebe pacotes UDP de múltiplas localidades e roteia por Serial/IP
+                <p className="text-xs text-[var(--fw-text-muted)] mt-1">
+                  Porta padrão {theme.defaultUdpPort}/udp · Roteia eventos por Serial/IP
                 </p>
               </div>
               {udpStatus?.running ? (
-                <span className="inline-flex items-center gap-1.5 text-xs font-mono text-[#1E4D3B] font-medium">
+                <span className="inline-flex items-center gap-1.5 text-xs font-mono text-[var(--fw-accent)] font-medium">
                   <Radio className="w-3.5 h-3.5" /> Escutando :{udpStatus.port}
                 </span>
               ) : (
-                <span className="text-xs font-mono text-[#4B6B5C]">Inativo</span>
+                <span className="text-xs font-mono text-[var(--fw-text-subtle)]">Inativo</span>
               )}
             </div>
 
             <div className="flex flex-wrap items-end gap-3">
               <div>
-                <label className="block text-xs font-medium text-[#1D3B2E] mb-1">Porta UDP</label>
+                <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">
+                  Porta UDP
+                </label>
                 <input
                   type="number"
                   value={udpPort}
                   disabled={udpStatus?.running}
                   onChange={(e) => setUdpPort(e.target.value)}
-                  className="w-28 px-3 py-2 text-xs font-mono border border-[#BFD5C5] rounded-md disabled:bg-[#EDF5EF]"
+                  className="w-28 px-3 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] disabled:bg-[var(--fw-surface)]"
                 />
               </div>
 
@@ -961,7 +1120,7 @@ export function ConnectLinuxView({
                 className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-md whitespace-nowrap ${
                   udpStatus?.running
                     ? 'text-red-700 bg-red-50 border border-red-200 hover:bg-red-100'
-                    : 'text-white bg-[#1E4D3B] hover:bg-[#163A2C]'
+                    : 'text-white bg-[var(--fw-accent)] hover:bg-[var(--fw-accent-hover)]'
                 }`}
               >
                 {udpStatus?.running ? (
@@ -980,15 +1139,15 @@ export function ConnectLinuxView({
                   type="button"
                   disabled={udpBusy}
                   onClick={() => void handleSendTestUdp()}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#1D3B2E] bg-white border border-[#BFD5C5] rounded-md hover:bg-[#EDF5EF] whitespace-nowrap"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] whitespace-nowrap"
                 >
-                  <Send className="w-3.5 h-3.5" /> Testar Pacote Local
+                  <Send className="w-3.5 h-3.5" /> Testar Pacote {theme.label}
                 </button>
               )}
             </div>
 
             {udpStatus && (
-              <p className="text-xs text-[#4B6B5C] font-mono tabular-nums">
+              <p className="text-xs text-[var(--fw-text-muted)] font-mono tabular-nums">
                 Pacotes recebidos nesta sessão: {udpStatus.packetsReceived.toLocaleString('pt-BR')}
                 {udpStatus.lastPacketAt ? ` · Último: ${udpStatus.lastPacketAt}` : ''}
               </p>
@@ -998,7 +1157,7 @@ export function ConnectLinuxView({
               <div
                 className={`p-3 rounded-md border text-xs ${
                   udpFeedback.type === 'ok'
-                    ? 'bg-[#E7F2EA] border-[#B6D4BE] text-[#143D2C]'
+                    ? 'bg-[var(--fw-surface)] border-[var(--fw-border-strong)] text-[var(--fw-heading)]'
                     : 'bg-red-50 border-red-200 text-red-800'
                 }`}
               >
@@ -1007,14 +1166,16 @@ export function ConnectLinuxView({
             )}
           </div>
 
-          <div className="bg-white border border-[#D4E4D8] rounded-lg p-6 space-y-4">
-            <div className="pb-3 border-b border-[#E6F0E8] flex items-center justify-between">
+          <div className="bg-white border border-[var(--fw-border)] rounded-lg p-6 space-y-4">
+            <div className="pb-3 border-b border-[var(--fw-border-soft)] flex items-center justify-between">
               <div>
-                <h2 className="text-sm font-semibold text-[#123325]">
+                <h2 className="text-sm font-semibold text-[var(--fw-heading)]">
                   Importação Offline ({activeSite?.name || 'Localidade Ativa'})
                 </h2>
-                <p className="text-xs text-[#4B6B5C] mt-1">
-                  Importe arquivos .exp, .json ou .log para esta localidade
+                <p className="text-xs text-[var(--fw-text-muted)] mt-1">
+                  {isForti
+                    ? 'Importe arquivos de syslog FortiOS (.log / .txt) para esta localidade'
+                    : 'Importe arquivos .exp, .json ou .log para esta localidade'}
                 </p>
               </div>
               <button
@@ -1027,20 +1188,22 @@ export function ConnectLinuxView({
             </div>
 
             <div className="flex flex-wrap gap-3">
-              <label className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-[#1D3B2E] bg-[#F4F8F5] border border-[#BFD5C5] rounded-md hover:bg-[#E7F2EA] cursor-pointer">
-                <FileUp className="w-3.5 h-3.5" />
-                {configBusy ? 'Processando...' : 'Importar Config (.exp / .json)'}
-                <input
-                  type="file"
-                  accept=".exp,.json,.txt"
-                  className="hidden"
-                  onChange={(e) => void handleConfigUpload(e.target.files?.[0])}
-                />
-              </label>
+              {!isForti && (
+                <label className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] cursor-pointer">
+                  <FileUp className="w-3.5 h-3.5" />
+                  {configBusy ? 'Processando...' : 'Importar Config (.exp / .json)'}
+                  <input
+                    type="file"
+                    accept=".exp,.json,.txt"
+                    className="hidden"
+                    onChange={(e) => void handleConfigUpload(e.target.files?.[0])}
+                  />
+                </label>
+              )}
 
-              <label className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-[#1D3B2E] bg-[#F4F8F5] border border-[#BFD5C5] rounded-md hover:bg-[#E7F2EA] cursor-pointer">
+              <label className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] cursor-pointer">
                 <FileUp className="w-3.5 h-3.5" />
-                Importar Arquivo Syslog (.log)
+                {configBusy ? 'Processando...' : 'Importar Arquivo Syslog (.log)'}
                 <input
                   type="file"
                   accept=".log,.txt,.syslog"
@@ -1054,7 +1217,7 @@ export function ConnectLinuxView({
               <div
                 className={`p-3 rounded-md border text-xs ${
                   configFeedback.type === 'ok'
-                    ? 'bg-[#E7F2EA] border-[#B6D4BE] text-[#143D2C]'
+                    ? 'bg-[var(--fw-surface)] border-[var(--fw-border-strong)] text-[var(--fw-heading)]'
                     : 'bg-red-50 border-red-200 text-red-800'
                 }`}
               >
@@ -1065,28 +1228,28 @@ export function ConnectLinuxView({
         </div>
       </div>
 
-      <div className="bg-white border border-[#D4E4D8] rounded-lg p-6 space-y-4">
-        <div className="pb-3 border-b border-[#E6F0E8] flex flex-wrap items-center justify-between gap-4">
+      <div className="bg-white border border-[var(--fw-border)] rounded-lg p-6 space-y-4">
+        <div className="pb-3 border-b border-[var(--fw-border-soft)] flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h2 className="text-sm font-semibold text-[#123325] inline-flex items-center gap-2">
-              <HardDrive className="w-4 h-4 text-[#1E4D3B]" />
+            <h2 className="text-sm font-semibold text-[var(--fw-heading)] inline-flex items-center gap-2">
+              <HardDrive className="w-4 h-4 text-[var(--fw-accent)]" />
               Retenção Automática de Syslogs e Proteção de Disco
             </h2>
-            <p className="text-xs text-[#4B6B5C] mt-1">
+            <p className="text-xs text-[var(--fw-text-muted)] mt-1">
               Syslogs mais antigos que o prazo configurado são expirados automaticamente no
               carregamento, na ingestão e a cada 1 hora em segundo plano.
             </p>
           </div>
           {retention && (
-            <span className="font-mono text-xs text-[#123325] tabular-nums">
-              Uso em disco (data/store.json): {formatBytes(retention.storeSizeBytes)}
+            <span className="font-mono text-xs text-[var(--fw-heading)] tabular-nums">
+              Uso em armazenamento: {formatBytes(retention.storeSizeBytes)}
             </span>
           )}
         </div>
 
         <div className="flex flex-wrap items-end gap-4">
           <div>
-            <label className="block text-xs font-medium text-[#1D3B2E] mb-1">
+            <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">
               Expirar syslogs após (dias)
             </label>
             <input
@@ -1095,7 +1258,7 @@ export function ConnectLinuxView({
               max={365}
               value={retentionInput}
               onChange={(e) => setRetentionInput(e.target.value)}
-              className="w-28 px-3 py-2 text-xs font-mono border border-[#BFD5C5] rounded-md"
+              className="w-28 px-3 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)]"
             />
           </div>
 
@@ -1103,7 +1266,7 @@ export function ConnectLinuxView({
             type="button"
             disabled={retentionBusy}
             onClick={() => void handleSaveRetention()}
-            className="px-4 py-2 text-xs font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C] disabled:opacity-50"
+            className="px-4 py-2 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-50"
           >
             Salvar Retenção
           </button>
@@ -1112,13 +1275,13 @@ export function ConnectLinuxView({
             type="button"
             disabled={retentionBusy}
             onClick={() => void handleRunPurgeNow()}
-            className="px-4 py-2 text-xs font-medium text-[#1D3B2E] bg-[#F4F8F5] border border-[#BFD5C5] rounded-md hover:bg-[#E7F2EA] disabled:opacity-50"
+            className="px-4 py-2 text-xs font-medium text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] disabled:opacity-50"
           >
             Executar Limpeza Agora
           </button>
 
           {retention && (
-            <p className="text-xs text-[#4B6B5C] tabular-nums">
+            <p className="text-xs text-[var(--fw-text-muted)] tabular-nums">
               {retention.lastPurgeAt
                 ? `Última limpeza: ${new Date(retention.lastPurgeAt).toLocaleString('pt-BR')} (${retention.lastPurgedCount} removidos)`
                 : 'Nenhuma limpeza manual executada ainda nesta sessão'}
@@ -1130,7 +1293,7 @@ export function ConnectLinuxView({
           <div
             className={`p-3 rounded-md border text-xs ${
               retentionFeedback.type === 'ok'
-                ? 'bg-[#E7F2EA] border-[#B6D4BE] text-[#143D2C]'
+                ? 'bg-[var(--fw-surface)] border-[var(--fw-border-strong)] text-[var(--fw-heading)]'
                 : 'bg-red-50 border-red-200 text-red-800'
             }`}
           >
@@ -1139,73 +1302,81 @@ export function ConnectLinuxView({
         )}
       </div>
 
-      <div className="bg-white border border-[#D4E4D8] rounded-lg p-6 space-y-5">
-        <div className="pb-3 border-b border-[#E6F0E8]">
-          <h2 className="text-sm font-semibold text-[#123325]">
-            Implantação em Produção no Linux (Ubuntu / Debian / RHEL)
+      <div className="bg-white border border-[var(--fw-border)] rounded-lg p-6 space-y-5">
+        <div className="pb-3 border-b border-[var(--fw-border-soft)]">
+          <h2 className="text-sm font-semibold text-[var(--fw-heading)]">
+            Implantação Containerizada no Ubuntu Server ({theme.label})
           </h2>
-          <p className="text-xs text-[#4B6B5C] mt-1">
-            Use as configurações abaixo para receber syslogs na porta padrão 514 via rsyslog sem
-            precisar rodar o Node.js como root e manter o serviço ativo via systemd.
+          <p className="text-xs text-[var(--fw-text-muted)] mt-1">
+            Portas UDP dedicadas por fabricante (5514 SonicWall / 5515 FortiGate) com isolamento
+            por container e banco PostgreSQL compartilhado.
           </p>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-[#123325]">
-                1. Configuração rsyslog (porta 514 → 5514)
+              <span className="text-xs font-medium text-[var(--fw-heading)]">
+                1. Configuração rsyslog (porta 514 → {Number(udpPort) || theme.defaultUdpPort})
               </span>
               <button
                 type="button"
-                onClick={() => void copyText('rsyslog', RSYSLOG_SNIPPET)}
-                className="inline-flex items-center gap-1 text-xs text-[#1E4D3B] hover:underline"
+                onClick={() => void copyText('rsyslog', rsyslogSnippet)}
+                className="inline-flex items-center gap-1 text-xs text-[var(--fw-accent)] hover:underline"
               >
-                {copiedBlock === 'rsyslog' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                {copiedBlock === 'rsyslog' ? (
+                  <Check className="w-3 h-3" />
+                ) : (
+                  <Copy className="w-3 h-3" />
+                )}
                 {copiedBlock === 'rsyslog' ? 'Copiado' : 'Copiar'}
               </button>
             </div>
-            <pre className="p-4 bg-[#0E221A] text-[#E6F2EB] rounded-md font-mono text-[11px] overflow-x-auto leading-5">
-              {RSYSLOG_SNIPPET}
+            <pre className="p-4 bg-[var(--fw-terminal-bg)] text-[var(--fw-terminal-text)] rounded-md font-mono text-[11px] overflow-x-auto leading-5">
+              {rsyslogSnippet}
             </pre>
           </div>
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-[#123325]">
-                2. Serviço systemd (execução contínua)
+              <span className="text-xs font-medium text-[var(--fw-heading)]">
+                2. Serviço Docker Compose ({vendor})
               </span>
               <button
                 type="button"
-                onClick={() => void copyText('systemd', SYSTEMD_SNIPPET)}
-                className="inline-flex items-center gap-1 text-xs text-[#1E4D3B] hover:underline"
+                onClick={() => void copyText('compose', composeSnippet)}
+                className="inline-flex items-center gap-1 text-xs text-[var(--fw-accent)] hover:underline"
               >
-                {copiedBlock === 'systemd' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                {copiedBlock === 'systemd' ? 'Copiado' : 'Copiar'}
+                {copiedBlock === 'compose' ? (
+                  <Check className="w-3 h-3" />
+                ) : (
+                  <Copy className="w-3 h-3" />
+                )}
+                {copiedBlock === 'compose' ? 'Copiado' : 'Copiar'}
               </button>
             </div>
-            <pre className="p-4 bg-[#0E221A] text-[#E6F2EB] rounded-md font-mono text-[11px] overflow-x-auto leading-5">
-              {SYSTEMD_SNIPPET}
+            <pre className="p-4 bg-[var(--fw-terminal-bg)] text-[var(--fw-terminal-text)] rounded-md font-mono text-[11px] overflow-x-auto leading-5">
+              {composeSnippet}
             </pre>
           </div>
         </div>
 
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-[#123325]">
+            <span className="text-xs font-medium text-[var(--fw-heading)]">
               3. Ingestão automática via CLI / Cron no Linux
             </span>
             <button
               type="button"
-              onClick={() => void copyText('curl', CURL_INGEST_SNIPPET)}
-              className="inline-flex items-center gap-1 text-xs text-[#1E4D3B] hover:underline"
+              onClick={() => void copyText('curl', curlSnippet)}
+              className="inline-flex items-center gap-1 text-xs text-[var(--fw-accent)] hover:underline"
             >
               {copiedBlock === 'curl' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
               {copiedBlock === 'curl' ? 'Copiado' : 'Copiar'}
             </button>
           </div>
-          <pre className="p-4 bg-[#0E221A] text-[#E6F2EB] rounded-md font-mono text-[11px] overflow-x-auto leading-5">
-            {CURL_INGEST_SNIPPET}
+          <pre className="p-4 bg-[var(--fw-terminal-bg)] text-[var(--fw-terminal-text)] rounded-md font-mono text-[11px] overflow-x-auto leading-5">
+            {curlSnippet}
           </pre>
         </div>
       </div>

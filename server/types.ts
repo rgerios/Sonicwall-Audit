@@ -1,3 +1,5 @@
+export type FirewallVendor = 'sonicwall' | 'fortigate';
+
 export type SyslogSeverity =
   | 'emergency'
   | 'alert'
@@ -209,6 +211,8 @@ export interface FirewallConnectionStored {
   protocol: 'https' | 'http';
   username: string;
   passwordEncrypted?: string;
+  authMode?: 'basic' | 'token';
+  vdom?: string;
   ignoreTlsErrors: boolean;
 }
 
@@ -218,11 +222,14 @@ export interface FirewallConnectionPublic {
   protocol: 'https' | 'http';
   username: string;
   hasSavedPassword: boolean;
+  authMode?: 'basic' | 'token';
+  vdom?: string;
   ignoreTlsErrors: boolean;
 }
 
 export interface FirewallSiteSummary {
   id: string;
+  vendor: FirewallVendor;
   name: string;
   location: string;
   notes: string;
@@ -244,8 +251,10 @@ export interface AuthStatus {
 }
 
 export interface AuditOverview {
+  vendor: FirewallVendor;
   activeSite: {
     id: string;
+    vendor: FirewallVendor;
     name: string;
     location: string;
     notes: string;
@@ -342,6 +351,7 @@ export interface AiChatMessage {
 
 export interface FirewallSiteRecord {
   id: string;
+  vendor: FirewallVendor;
   name: string;
   location: string;
   notes: string;
@@ -360,6 +370,7 @@ export interface FirewallSiteRecord {
 }
 
 export interface DataStore {
+  vendor: FirewallVendor;
   activeSiteId: string;
   sites: Record<string, FirewallSiteRecord>;
   aiSettings?: AiProviderSettings;

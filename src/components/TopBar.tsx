@@ -1,7 +1,9 @@
 import { Database, Upload } from 'lucide-react';
-import type { ActiveSection } from '../types.ts';
+import type { ActiveSection, FirewallVendor } from '../types.ts';
+import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
 
 interface TopBarProps {
+  vendor: FirewallVendor;
   activeSection: ActiveSection;
   activeSiteName?: string;
   onLoadSample: () => void;
@@ -9,37 +11,48 @@ interface TopBarProps {
   loadingSample: boolean;
 }
 
-const SECTION_LABELS: Record<ActiveSection, string> = {
-  overview: 'Visão Geral',
-  syslogs: 'Análise de Syslogs',
-  rules: 'Regras de Firewall Sem Uso',
-  nats: 'Políticas NAT Sem Uso',
-  reports: 'Relatório Consolidado',
-  ai: 'Análise Humana com IA',
-  connect: 'Localidades, Conexão e Linux',
-};
-
 export function TopBar({
+  vendor,
   activeSection,
   activeSiteName,
   onLoadSample,
   onGoToConnect,
   loadingSample,
 }: TopBarProps) {
+  const theme = VENDOR_THEMES[vendor];
+
+  const sectionLabels: Record<ActiveSection, string> = {
+    overview: 'Visão Geral',
+    syslogs: 'Análise de Syslogs',
+    rules: 'Regras de Firewall Sem Uso',
+    nats: vendor === 'fortigate' ? 'VIPs, IP Pools & NAT Sem Uso' : 'Políticas NAT Sem Uso',
+    reports: 'Relatório Consolidado',
+    ai: 'Análise Humana com IA',
+    connect: 'Localidades, Conexão e Linux',
+  };
+
   return (
-    <header className="h-16 bg-white border-b border-[#D4E4D8] px-6 flex items-center justify-between gap-8 shrink-0">
+    <header className="h-16 bg-white border-b border-[var(--fw-border)] px-6 flex items-center justify-between gap-8 shrink-0">
       <div className="flex items-center gap-2 text-sm min-w-0">
-        <span className="text-[#4B6B5C] whitespace-nowrap shrink-0">SonicAudit</span>
-        <span className="text-[#94B09F]" aria-hidden="true">
+        <span className="text-[var(--fw-text-muted)] whitespace-nowrap shrink-0">FW Audit</span>
+        <span className="text-[var(--fw-text-faint)]" aria-hidden="true">
           /
         </span>
-        <h1 className="font-semibold text-[#123325] truncate">{SECTION_LABELS[activeSection]}</h1>
+        <span className="font-medium text-[var(--fw-accent)] whitespace-nowrap shrink-0">
+          {theme.label}
+        </span>
+        <span className="text-[var(--fw-text-faint)]" aria-hidden="true">
+          /
+        </span>
+        <h1 className="font-semibold text-[var(--fw-heading)] truncate">
+          {sectionLabels[activeSection]}
+        </h1>
         {activeSiteName && (
           <>
-            <span className="text-[#94B09F] hidden sm:inline" aria-hidden="true">
+            <span className="text-[var(--fw-text-faint)] hidden sm:inline" aria-hidden="true">
               ·
             </span>
-            <span className="text-xs font-medium text-[#2A6B52] truncate hidden sm:inline">
+            <span className="text-xs font-medium text-[var(--fw-accent-mid)] truncate hidden sm:inline">
               {activeSiteName}
             </span>
           </>
@@ -51,15 +64,15 @@ export function TopBar({
           type="button"
           onClick={onLoadSample}
           disabled={loadingSample}
-          className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-[#1D3B2E] bg-[#F4F8F5] border border-[#BFD5C5] rounded-md hover:bg-[#E7F2EA] transition-colors whitespace-nowrap shrink-0 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2A6B52]"
+          className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] transition-colors whitespace-nowrap shrink-0 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--fw-accent-mid)]"
         >
           <Database className="w-3.5 h-3.5" aria-hidden="true" />
-          {loadingSample ? 'Carregando...' : 'Carregar Amostra TZ470'}
+          {loadingSample ? 'Carregando...' : theme.sampleButtonLabel}
         </button>
         <button
           type="button"
           onClick={onGoToConnect}
-          className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C] transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2A6B52]"
+          className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--fw-accent-mid)]"
         >
           <Upload className="w-3.5 h-3.5" aria-hidden="true" />
           Conectar ou Importar

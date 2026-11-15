@@ -37,10 +37,12 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import type { ActiveSection, AuditOverview } from '../types.ts';
+import type { ActiveSection, AuditOverview, FirewallVendor } from '../types.ts';
+import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
 import { OverviewAlertCenter } from './OverviewAlertCenter.tsx';
 
 interface OverviewViewProps {
+  vendor: FirewallVendor;
   overview: AuditOverview | null;
   loading: boolean;
   onNavigate: (section: ActiveSection) => void;
@@ -74,7 +76,7 @@ const WIDGET_META: Record<WidgetId, { title: string }> = {
   'policy-hygiene': { title: 'Higiene das Políticas' },
   'top-blocked': { title: 'Origens Bloqueadas' },
   'top-ports': { title: 'Portas Mais Visadas' },
-  'zone-traffic': { title: 'Fluxo entre Zonas' },
+  'zone-traffic': { title: 'Fluxo entre Zonas / Interfaces' },
 };
 
 const DEFAULT_LAYOUT: WidgetPreference[] = [
@@ -88,7 +90,9 @@ const DEFAULT_LAYOUT: WidgetPreference[] = [
   { id: 'zone-traffic', span: 1, visible: true },
 ];
 
-const LAYOUT_STORAGE_KEY = 'sonicaudit_overview_layout_v1';
+function getLayoutStorageKey(vendor: FirewallVendor): string {
+  return `fwaudit_overview_layout_v1_${vendor}`;
+}
 
 function formatTrafficBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
@@ -102,9 +106,9 @@ function formatTrafficBytes(bytes: number): string {
   return `${val.toFixed(idx >= 3 ? 2 : 1)} ${units[idx]}`;
 }
 
-function loadSavedLayout(): WidgetPreference[] {
+function loadSavedLayout(vendor: FirewallVendor): WidgetPreference[] {
   try {
-    const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
+    const raw = localStorage.getItem(getLayoutStorageKey(vendor));
     if (!raw) return DEFAULT_LAYOUT;
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return DEFAULT_LAYOUT;
@@ -143,6 +147,7 @@ function loadSavedLayout(): WidgetPreference[] {
 }
 
 export function OverviewView({
+  vendor,
   overview,
   loading,
   onNavigate,
@@ -151,19 +156,25 @@ export function OverviewView({
   onInvestigateSyslog,
   onAnalyzeWithAi,
 }: OverviewViewProps) {
-  const [layout, setLayout] = useState<WidgetPreference[]>(() => loadSavedLayout());
+  const theme = VENDOR_THEMES[vendor];
+  const [layout, setLayout] = useState<WidgetPreference[]>(() => loadSavedLayout(vendor));
   const [draggingId, setDraggingId] = useState<WidgetId | null>(null);
   const [dragOverId, setDragOverId] = useState<WidgetId | null>(null);
   const [armedDragId, setArmedDragId] = useState<WidgetId | null>(null);
   const [showWidgetManager, setShowWidgetManager] = useState(false);
 
   useEffect(() => {
+    setLayout(loadSavedLayout(vendor));
+    setShowWidgetManager(false);
+  }, [vendor]);
+
+  useEffect(() => {
     try {
-      localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+      localStorage.setItem(getLayoutStorageKey(vendor), JSON.stringify(layout));
     } catch {
       // Storage quota or restricted mode ignored
     }
-  }, [layout]);
+  }, [layout, vendor]);
 
   const moveWidget = (sourceId: WidgetId, targetId: WidgetId) => {
     if (sourceId === targetId) return;
@@ -221,10 +232,10 @@ export function OverviewView({
       <div className="space-y-6 animate-pulse">
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-28 bg-white border border-[#D4E4D8] rounded-lg" />
+            <div key={i} className="h-28 bg-white border border-[var(--fw-border)] rounded-lg" />
           ))}
         </div>
-        <div className="h-72 bg-white border border-[#D4E4D8] rounded-lg" />
+        <div className="h-72 bg-white border border-[var(--fw-border)] rounded-lg" />
       </div>
     );
   }
@@ -238,23 +249,36 @@ export function OverviewView({
 
   if (!hasData) {
     return (
-      <div className="bg-white border border-[#D4E4D8] rounded-lg p-10 max-w-3xl">
-        <h2 className="text-xl font-semibold text-[#123325]">
-          Nenhum dado SonicWall carregado ainda
+      <div className="bg-white border border-[var(--fw-border)] rounded-lg p-10 max-w-3xl">
+        <h2 className="text-xl font-semibold text-[var(--fw-heading)]">
+          Nenhum dado {theme.label} carregado ainda
         </h2>
-        <p className="text-sm text-[#456354] mt-2 leading-relaxed max-w-2xl">
-          Para iniciar a auditoria no seu ambiente Linux, conecte diretamente na API REST do
-          SonicOS, inicie o receptor UDP Syslog para receber eventos do firewall em tempo real,
-          ou importe um arquivo de log (<span className="font-mono text-[#123325]">.log</span>)
-          e configuração (<span className="font-mono text-[#123325]">.exp</span> /{' '}
-          <span className="font-mono text-[#123325]">.json</span>).
+        <p className="text-sm text-[var(--fw-text-muted)] mt-2 leading-relaxed max-w-2xl">
+          {vendor === 'fortigate' ? (
+            <>
+              Para iniciar a auditoria FortiGate, conecte diretamente na API REST do FortiOS usando
+              um token Bearer, inicie o receptor Syslog UDP na porta{' '}
+              <span className="font-mono text-[var(--fw-heading)]">5515</span> para eventos em
+              tempo real, ou importe arquivos de syslog (<span className="font-mono">.log</span>).
+            </>
+          ) : (
+            <>
+              Para iniciar a auditoria no seu ambiente Linux, conecte diretamente na API REST do
+              SonicOS, inicie o receptor UDP Syslog na porta{' '}
+              <span className="font-mono text-[var(--fw-heading)]">5514</span> para receber
+              eventos do firewall em tempo real, ou importe um arquivo de log (
+              <span className="font-mono text-[var(--fw-heading)]">.log</span>) e configuração (
+              <span className="font-mono text-[var(--fw-heading)]">.exp</span> /{' '}
+              <span className="font-mono text-[var(--fw-heading)]">.json</span>).
+            </>
+          )}
         </p>
 
         <div className="mt-6 flex flex-wrap items-center gap-3">
           <button
             type="button"
             onClick={() => onNavigate('connect')}
-            className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C] transition-colors"
+            className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] transition-colors"
           >
             <ServerCog className="w-4 h-4" />
             Configurar Conexão ou Importar Arquivos
@@ -262,10 +286,10 @@ export function OverviewView({
           <button
             type="button"
             onClick={onLoadSample}
-            className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-[#1D3B2E] bg-[#F4F8F5] border border-[#BFD5C5] rounded-md hover:bg-[#E7F2EA] transition-colors"
+            className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] transition-colors"
           >
             <Database className="w-4 h-4" />
-            Carregar Amostra SonicWall TZ470
+            {theme.sampleButtonLabel}
           </button>
         </div>
       </div>
@@ -314,23 +338,25 @@ export function OverviewView({
       case 'kpi-summary':
         return (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-            <div className="bg-[#F4F8F5] border border-[#D4E4D8] rounded-md p-4">
-              <p className="text-xs font-medium text-[#4B6B5C]">Syslogs Analisados</p>
-              <p className="text-2xl font-semibold text-[#123325] font-mono tabular-nums mt-2">
+            <div className="bg-[var(--fw-bg)] border border-[var(--fw-border)] rounded-md p-4">
+              <p className="text-xs font-medium text-[var(--fw-text-muted)]">Syslogs Analisados</p>
+              <p className="text-2xl font-semibold text-[var(--fw-heading)] font-mono tabular-nums mt-2">
                 {overview.totalSyslogs.toLocaleString('pt-BR')}
               </p>
-              <p className="text-xs text-[#4B6B5C] mt-2 tabular-nums">
+              <p className="text-xs text-[var(--fw-text-muted)] mt-2 tabular-nums">
                 Retenção: {overview.retention?.retentionDays ?? 10} dias ·{' '}
                 {overview.syslogBreakdown.allow.toLocaleString('pt-BR')} permitidos
               </p>
             </div>
 
-            <div className="bg-[#F4F8F5] border border-[#D4E4D8] rounded-md p-4">
-              <p className="text-xs font-medium text-[#4B6B5C]">Alertas Críticos e Drops</p>
+            <div className="bg-[var(--fw-bg)] border border-[var(--fw-border)] rounded-md p-4">
+              <p className="text-xs font-medium text-[var(--fw-text-muted)]">
+                Alertas Críticos e Drops
+              </p>
               <p className="text-2xl font-semibold text-red-700 font-mono tabular-nums mt-2">
                 {overview.syslogBreakdown.blocked.toLocaleString('pt-BR')}
               </p>
-              <p className="text-xs text-[#4B6B5C] mt-2 tabular-nums">
+              <p className="text-xs text-[var(--fw-text-muted)] mt-2 tabular-nums">
                 {overview.syslogBreakdown.criticalAndError} eventos severidade crítica/erro
               </p>
             </div>
@@ -338,20 +364,22 @@ export function OverviewView({
             <button
               type="button"
               onClick={() => onNavigate('rules')}
-              className="text-left bg-[#F4F8F5] border border-[#D4E4D8] rounded-md p-4 hover:border-[#9EC2AA] transition-colors"
+              className="text-left bg-[var(--fw-bg)] border border-[var(--fw-border)] rounded-md p-4 hover:border-[var(--fw-border-strong)] transition-colors"
             >
               <div className="flex items-center justify-between">
-                <p className="text-xs font-medium text-[#4B6B5C]">Regras de Firewall Sem Uso</p>
-                <ArrowRight className="w-3.5 h-3.5 text-[#7CA08A]" />
+                <p className="text-xs font-medium text-[var(--fw-text-muted)]">
+                  Regras de Firewall Sem Uso
+                </p>
+                <ArrowRight className="w-3.5 h-3.5 text-[var(--fw-text-subtle)]" />
               </div>
               <p className="text-2xl font-semibold text-amber-800 font-mono tabular-nums mt-2">
                 {problemRules.toLocaleString('pt-BR')}
-                <span className="text-sm font-normal text-[#6D8B7B]">
+                <span className="text-sm font-normal text-[var(--fw-text-subtle)]">
                   {' '}
                   / {totalRules.toLocaleString('pt-BR')}
                 </span>
               </p>
-              <p className="text-xs text-[#4B6B5C] mt-2 tabular-nums">
+              <p className="text-xs text-[var(--fw-text-muted)] mt-2 tabular-nums">
                 {overview.rulesSummary.unused} zero hits · {overview.rulesSummary.shadowed} sombreadas
               </p>
             </button>
@@ -359,20 +387,22 @@ export function OverviewView({
             <button
               type="button"
               onClick={() => onNavigate('nats')}
-              className="text-left bg-[#F4F8F5] border border-[#D4E4D8] rounded-md p-4 hover:border-[#9EC2AA] transition-colors"
+              className="text-left bg-[var(--fw-bg)] border border-[var(--fw-border)] rounded-md p-4 hover:border-[var(--fw-border-strong)] transition-colors"
             >
               <div className="flex items-center justify-between">
-                <p className="text-xs font-medium text-[#4B6B5C]">Políticas NAT Sem Uso</p>
-                <ArrowRight className="w-3.5 h-3.5 text-[#7CA08A]" />
+                <p className="text-xs font-medium text-[var(--fw-text-muted)]">
+                  {vendor === 'fortigate' ? 'VIPs & NATs Sem Uso' : 'Políticas NAT Sem Uso'}
+                </p>
+                <ArrowRight className="w-3.5 h-3.5 text-[var(--fw-text-subtle)]" />
               </div>
               <p className="text-2xl font-semibold text-amber-800 font-mono tabular-nums mt-2">
                 {problemNats.toLocaleString('pt-BR')}
-                <span className="text-sm font-normal text-[#6D8B7B]">
+                <span className="text-sm font-normal text-[var(--fw-text-subtle)]">
                   {' '}
                   / {totalNats.toLocaleString('pt-BR')}
                 </span>
               </p>
-              <p className="text-xs text-[#4B6B5C] mt-2 tabular-nums">
+              <p className="text-xs text-[var(--fw-text-muted)] mt-2 tabular-nums">
                 {overview.natsSummary.unused} sem uso · {overview.natsSummary.orphaned} órfãs
               </p>
             </button>
@@ -383,63 +413,72 @@ export function OverviewView({
         return (
           <div className="space-y-5">
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-              <div className="bg-[#F4F8F5] border border-[#D4E4D8] rounded-md p-4">
-                <div className="flex items-center justify-between text-xs text-[#4B6B5C]">
-                  <span>Uptime & Disponibilidade</span>
-                  <Clock className="w-3.5 h-3.5 text-[#1E4D3B]" />
+              <div className="bg-[var(--fw-bg)] border border-[var(--fw-border)] rounded-md p-4">
+                <div className="flex items-center justify-between text-xs text-[var(--fw-text-muted)]">
+                  <span>Uptime &amp; Disponibilidade</span>
+                  <Clock className="w-3.5 h-3.5 text-[var(--fw-accent)]" />
                 </div>
-                <p className="text-xl font-semibold text-[#123325] font-mono tabular-nums mt-2">
+                <p className="text-xl font-semibold text-[var(--fw-heading)] font-mono tabular-nums mt-2">
                   {ap.uptimeFormatted || 'Via API REST'}
                 </p>
-                <p className="text-[11px] text-[#4B6B5C] mt-1.5 font-mono truncate">
+                <p className="text-[11px] text-[var(--fw-text-muted)] mt-1.5 font-mono truncate">
                   {ap.haRole ? `HA: ${ap.haRole}` : `Host: ${ap.host}`} · S/N {ap.serialNumber}
                 </p>
               </div>
 
-              <div className="bg-[#F4F8F5] border border-[#D4E4D8] rounded-md p-4">
-                <div className="flex items-center justify-between text-xs text-[#4B6B5C]">
-                  <span>Versão SonicOS & ROM</span>
-                  <ShieldCheck className="w-3.5 h-3.5 text-[#1E4D3B]" />
+              <div className="bg-[var(--fw-bg)] border border-[var(--fw-border)] rounded-md p-4">
+                <div className="flex items-center justify-between text-xs text-[var(--fw-text-muted)]">
+                  <span>
+                    {vendor === 'fortigate' ? 'Versão FortiOS & Modelo' : 'Versão SonicOS & ROM'}
+                  </span>
+                  <ShieldCheck className="w-3.5 h-3.5 text-[var(--fw-accent)]" />
                 </div>
-                <p className="text-sm font-semibold text-[#123325] font-mono mt-2 truncate" title={ap.firmware}>
+                <p
+                  className="text-sm font-semibold text-[var(--fw-heading)] font-mono mt-2 truncate"
+                  title={ap.firmware}
+                >
                   {ap.firmware}
                 </p>
-                <p className="text-[11px] text-[#4B6B5C] mt-2 font-mono tabular-nums truncate">
+                <p className="text-[11px] text-[var(--fw-text-muted)] mt-2 font-mono tabular-nums truncate">
                   {ap.romVersion ? `ROM ${ap.romVersion}` : ap.model}
                   {ap.safemodeVersion ? ` · SafeMode ${ap.safemodeVersion}` : ''}
                 </p>
               </div>
 
-              <div className="bg-[#F4F8F5] border border-[#D4E4D8] rounded-md p-4">
-                <div className="flex items-center justify-between text-xs text-[#4B6B5C]">
-                  <span>CPU & Memória RAM</span>
-                  <Cpu className="w-3.5 h-3.5 text-[#1E4D3B]" />
+              <div className="bg-[var(--fw-bg)] border border-[var(--fw-border)] rounded-md p-4">
+                <div className="flex items-center justify-between text-xs text-[var(--fw-text-muted)]">
+                  <span>CPU &amp; Memória RAM</span>
+                  <Cpu className="w-3.5 h-3.5 text-[var(--fw-accent)]" />
                 </div>
                 <div className="mt-2 space-y-2">
                   <div>
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-[#456354]">CPU</span>
-                      <span className="font-mono tabular-nums font-semibold text-[#123325]">
-                        {ap.cpuPercent !== undefined && ap.cpuPercent !== null ? `${ap.cpuPercent}%` : '—'}
+                      <span className="text-[var(--fw-text-muted)]">CPU</span>
+                      <span className="font-mono tabular-nums font-semibold text-[var(--fw-heading)]">
+                        {ap.cpuPercent !== undefined && ap.cpuPercent !== null
+                          ? `${ap.cpuPercent}%`
+                          : '—'}
                       </span>
                     </div>
-                    <div className="h-1.5 w-full bg-[#DCE9E0] rounded-sm overflow-hidden mt-1">
+                    <div className="h-1.5 w-full bg-[var(--fw-surface-alt)] rounded-sm overflow-hidden mt-1">
                       <div
-                        className="h-full bg-[#1E4D3B]"
+                        className="h-full bg-[var(--fw-accent)]"
                         style={{ width: `${ap.cpuPercent ?? 0}%` }}
                       />
                     </div>
                   </div>
                   <div>
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-[#456354]">RAM</span>
-                      <span className="font-mono tabular-nums font-semibold text-[#123325]">
-                        {ap.memoryPercent !== undefined && ap.memoryPercent !== null ? `${ap.memoryPercent}%` : '—'}
+                      <span className="text-[var(--fw-text-muted)]">RAM</span>
+                      <span className="font-mono tabular-nums font-semibold text-[var(--fw-heading)]">
+                        {ap.memoryPercent !== undefined && ap.memoryPercent !== null
+                          ? `${ap.memoryPercent}%`
+                          : '—'}
                       </span>
                     </div>
-                    <div className="h-1.5 w-full bg-[#DCE9E0] rounded-sm overflow-hidden mt-1">
+                    <div className="h-1.5 w-full bg-[var(--fw-surface-alt)] rounded-sm overflow-hidden mt-1">
                       <div
-                        className="h-full bg-[#4CA87A]"
+                        className="h-full bg-[var(--fw-accent-mid)]"
                         style={{ width: `${ap.memoryPercent ?? 0}%` }}
                       />
                     </div>
@@ -447,17 +486,17 @@ export function OverviewView({
                 </div>
               </div>
 
-              <div className="bg-[#F4F8F5] border border-[#D4E4D8] rounded-md p-4">
-                <div className="flex items-center justify-between text-xs text-[#4B6B5C]">
+              <div className="bg-[var(--fw-bg)] border border-[var(--fw-border)] rounded-md p-4">
+                <div className="flex items-center justify-between text-xs text-[var(--fw-text-muted)]">
                   <span>Conexões Simultâneas</span>
-                  <Activity className="w-3.5 h-3.5 text-[#1E4D3B]" />
+                  <Activity className="w-3.5 h-3.5 text-[var(--fw-accent)]" />
                 </div>
-                <p className="text-xl font-semibold text-[#123325] font-mono tabular-nums mt-2">
+                <p className="text-xl font-semibold text-[var(--fw-heading)] font-mono tabular-nums mt-2">
                   {ap.activeConnections !== undefined && ap.activeConnections !== null
                     ? ap.activeConnections.toLocaleString('pt-BR')
                     : '—'}
                   {ap.maxConnections ? (
-                    <span className="text-xs font-normal text-[#5C7A6B]">
+                    <span className="text-xs font-normal text-[var(--fw-text-subtle)]">
                       {' '}
                       / {ap.maxConnections.toLocaleString('pt-BR')}
                     </span>
@@ -465,15 +504,18 @@ export function OverviewView({
                 </p>
                 {connPct !== null ? (
                   <div className="mt-2">
-                    <div className="h-1.5 w-full bg-[#DCE9E0] rounded-sm overflow-hidden">
-                      <div className="h-full bg-[#1E4D3B]" style={{ width: `${connPct}%` }} />
+                    <div className="h-1.5 w-full bg-[var(--fw-surface-alt)] rounded-sm overflow-hidden">
+                      <div
+                        className="h-full bg-[var(--fw-accent)]"
+                        style={{ width: `${connPct}%` }}
+                      />
                     </div>
-                    <p className="text-[11px] text-[#4B6B5C] mt-1 font-mono tabular-nums">
+                    <p className="text-[11px] text-[var(--fw-text-muted)] mt-1 font-mono tabular-nums">
                       {connPct}% da tabela de sessões
                     </p>
                   </div>
                 ) : (
-                  <p className="text-[11px] text-[#4B6B5C] mt-2">
+                  <p className="text-[11px] text-[var(--fw-text-muted)] mt-2">
                     Sincronize via API REST para métricas em tempo real
                   </p>
                 )}
@@ -481,20 +523,26 @@ export function OverviewView({
             </div>
 
             {telemetry.licenses.length > 0 && (
-              <div className="border border-[#D4E4D8] rounded-md overflow-hidden">
-                <div className="bg-[#EDF5EF] px-4 py-2 border-b border-[#D4E4D8] flex items-center justify-between text-xs">
-                  <span className="font-medium text-[#244838] inline-flex items-center gap-1.5">
-                    <HardDrive className="w-3.5 h-3.5" /> Licenças & Serviços de Segurança SonicGuard
+              <div className="border border-[var(--fw-border)] rounded-md overflow-hidden">
+                <div className="bg-[var(--fw-surface)] px-4 py-2 border-b border-[var(--fw-border)] flex items-center justify-between text-xs">
+                  <span className="font-medium text-[var(--fw-text-body)] inline-flex items-center gap-1.5">
+                    <HardDrive className="w-3.5 h-3.5" />
+                    {vendor === 'fortigate'
+                      ? 'Licenças & Serviços de Segurança FortiGuard'
+                      : 'Licenças & Serviços de Segurança SonicGuard'}
                   </span>
-                  <span className="text-[#4B6B5C] font-mono tabular-nums">
+                  <span className="text-[var(--fw-text-muted)] font-mono tabular-nums">
                     {telemetry.licenses.filter((l) => l.status === 'active').length}/
                     {telemetry.licenses.length} ativos
                   </span>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 divide-y sm:divide-y-0 sm:divide-x divide-[#E6F0E8] bg-white">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 divide-y sm:divide-y-0 sm:divide-x divide-[var(--fw-border-soft)] bg-white">
                   {telemetry.licenses.map((lic) => (
                     <div key={lic.service} className="p-3 text-xs">
-                      <p className="font-medium text-[#123325] truncate" title={lic.service}>
+                      <p
+                        className="font-medium text-[var(--fw-heading)] truncate"
+                        title={lic.service}
+                      >
                         {lic.service}
                       </p>
                       <div className="mt-1.5 flex items-center justify-between gap-2">
@@ -508,10 +556,11 @@ export function OverviewView({
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-red-700 font-medium">
-                            <Ban className="w-3.5 h-3.5" /> {lic.status === 'expired' ? 'Expirada' : 'Inativa'}
+                            <Ban className="w-3.5 h-3.5" />{' '}
+                            {lic.status === 'expired' ? 'Expirada' : 'Inativa'}
                           </span>
                         )}
-                        <span className="font-mono text-[11px] text-[#5C7A6B] tabular-nums">
+                        <span className="font-mono text-[11px] text-[var(--fw-text-subtle)] tabular-nums">
                           {lic.expiresAt || '—'}
                         </span>
                       </div>
@@ -525,18 +574,20 @@ export function OverviewView({
 
       case 'link-consumption':
         return telemetry.interfaces.length === 0 && telemetry.vpns.length === 0 ? (
-          <div className="py-6 text-center text-xs text-[#4B6B5C]">
-            Nenhum dado de interface ou VPN disponível ainda. Conecte diretamente via API REST do SonicOS
-            (ou carregue a amostra TZ470) para acompanhar consumo de link Rx/Tx em Mbps e status de túneis.
+          <div className="py-6 text-center text-xs text-[var(--fw-text-muted)]">
+            Nenhum dado de interface ou VPN disponível ainda. Conecte diretamente via API REST{' '}
+            {vendor === 'fortigate' ? 'FortiOS' : 'SonicOS'} (ou carregue a amostra de demonstração)
+            para acompanhar consumo de link Rx/Tx em Mbps e status de túneis.
           </div>
         ) : (
           <div className="space-y-6">
             {telemetry.interfaces.length > 0 && (
               <div className="grid grid-cols-1 xl:grid-cols-5 gap-6 items-start">
-                <div className="xl:col-span-2 bg-[#F4F8F5] border border-[#D4E4D8] rounded-md p-4">
+                <div className="xl:col-span-2 bg-[var(--fw-bg)] border border-[var(--fw-border)] rounded-md p-4">
                   <div className="flex items-center justify-between mb-3">
-                    <span className="text-xs font-medium text-[#123325] inline-flex items-center gap-1.5">
-                      <Network className="w-3.5 h-3.5 text-[#1E4D3B]" /> Vazão Instantânea por Interface (Mbps)
+                    <span className="text-xs font-medium text-[var(--fw-heading)] inline-flex items-center gap-1.5">
+                      <Network className="w-3.5 h-3.5 text-[var(--fw-accent)]" /> Vazão Instantânea
+                      por Interface (Mbps)
                     </span>
                   </div>
                   <div className="h-56 w-full">
@@ -545,39 +596,52 @@ export function OverviewView({
                         data={telemetry.interfaces}
                         margin={{ top: 6, right: 8, left: -16, bottom: 0 }}
                       >
-                        <CartesianGrid strokeDasharray="3 3" stroke="#DCE9E0" vertical={false} />
+                        <CartesianGrid
+                          strokeDasharray="3 3"
+                          stroke={theme.chartGrid}
+                          vertical={false}
+                        />
                         <XAxis
                           dataKey="name"
-                          tick={{ fontSize: 11, fill: '#4B6B5C' }}
-                          axisLine={{ stroke: '#D4E4D8' }}
+                          tick={{ fontSize: 11, fill: theme.chartAxis }}
+                          axisLine={{ stroke: theme.chartGrid }}
                           tickLine={false}
                         />
                         <YAxis
-                          tick={{ fontSize: 11, fill: '#4B6B5C' }}
+                          tick={{ fontSize: 11, fill: theme.chartAxis }}
                           axisLine={false}
                           tickLine={false}
                         />
                         <Tooltip
                           contentStyle={{
                             backgroundColor: '#FFFFFF',
-                            borderColor: '#BFD5C5',
+                            borderColor: theme.chartGrid,
                             borderRadius: '6px',
                             fontSize: '12px',
-                            color: '#123325',
                           }}
                         />
                         <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '6px' }} />
-                        <Bar dataKey="rxMbps" name="Download (Rx Mbps)" fill="#1E4D3B" radius={[2, 2, 0, 0]} />
-                        <Bar dataKey="txMbps" name="Upload (Tx Mbps)" fill="#4CA87A" radius={[2, 2, 0, 0]} />
+                        <Bar
+                          dataKey="rxMbps"
+                          name="Download (Rx Mbps)"
+                          fill={theme.chartPrimary}
+                          radius={[2, 2, 0, 0]}
+                        />
+                        <Bar
+                          dataKey="txMbps"
+                          name="Upload (Tx Mbps)"
+                          fill={theme.chartAllow}
+                          radius={[2, 2, 0, 0]}
+                        />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
                 </div>
 
-                <div className="xl:col-span-3 overflow-x-auto border border-[#D4E4D8] rounded-md">
+                <div className="xl:col-span-3 overflow-x-auto border border-[var(--fw-border)] rounded-md">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="bg-[#EDF5EF] text-[#244838] border-b border-[#D4E4D8]">
+                      <tr className="bg-[var(--fw-surface)] text-[var(--fw-text-body)] border-b border-[var(--fw-border)]">
                         <th className="py-2 px-3 text-left font-medium">Interface</th>
                         <th className="py-2 px-3 text-left font-medium">IP / Papel</th>
                         <th className="py-2 px-3 text-left font-medium">Link</th>
@@ -587,16 +651,20 @@ export function OverviewView({
                         <th className="py-2 px-3 text-right font-medium">Erros</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-[#E6F0E8]">
+                    <tbody className="divide-y divide-[var(--fw-border-soft)]">
                       {telemetry.interfaces.map((iface) => (
                         <tr key={iface.name}>
                           <td className="py-2.5 px-3">
-                            <p className="font-mono font-semibold text-[#123325]">{iface.name}</p>
-                            <p className="text-[11px] text-[#5C7A6B]">Zona {iface.zone}</p>
+                            <p className="font-mono font-semibold text-[var(--fw-heading)]">
+                              {iface.name}
+                            </p>
+                            <p className="text-[11px] text-[var(--fw-text-subtle)]">
+                              Zona {iface.zone}
+                            </p>
                           </td>
                           <td className="py-2.5 px-3">
-                            <p className="font-mono text-[#123325]">{iface.ip}</p>
-                            <p className="text-[11px] text-[#5C7A6B]">
+                            <p className="font-mono text-[var(--fw-heading)]">{iface.ip}</p>
+                            <p className="text-[11px] text-[var(--fw-text-subtle)]">
                               {iface.role === 'wan-primary'
                                 ? 'WAN Principal'
                                 : iface.role === 'wan-failover'
@@ -613,7 +681,7 @@ export function OverviewView({
                               <span className="text-red-700 font-medium">DOWN</span>
                             )}
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#123325]">
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[var(--fw-heading)]">
                             {iface.rxMbps.toFixed(1)} / {iface.txMbps.toFixed(1)}
                           </td>
                           <td className="py-2.5 px-3 text-right">
@@ -625,34 +693,38 @@ export function OverviewView({
                                 <div className="inline-flex flex-col items-end">
                                   <span
                                     className={`font-mono tabular-nums font-semibold ${
-                                      isBreached ? 'text-red-700' : 'text-[#1E4D3B]'
+                                      isBreached ? 'text-red-700' : 'text-[var(--fw-accent)]'
                                     }`}
                                   >
                                     {iface.utilizationPercent.toFixed(1)}%
                                   </span>
-                                  <div className="w-16 h-1.5 bg-[#E2EDE5] rounded-sm overflow-hidden mt-1">
+                                  <div className="w-16 h-1.5 bg-[var(--fw-surface-alt)] rounded-sm overflow-hidden mt-1">
                                     <div
                                       className={`h-full ${
                                         isBreached
                                           ? 'bg-red-600'
                                           : iface.utilizationPercent > Math.max(40, pctLimit - 15)
                                             ? 'bg-amber-600'
-                                            : 'bg-[#1E4D3B]'
+                                            : 'bg-[var(--fw-accent)]'
                                       }`}
-                                      style={{ width: `${Math.min(100, iface.utilizationPercent)}%` }}
+                                      style={{
+                                        width: `${Math.min(100, iface.utilizationPercent)}%`,
+                                      }}
                                     />
                                   </div>
                                 </div>
                               );
                             })()}
                           </td>
-                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[#456354]">
+                          <td className="py-2.5 px-3 text-right font-mono tabular-nums text-[var(--fw-text-muted)]">
                             {formatTrafficBytes(iface.rxBytes + iface.txBytes)}
                           </td>
                           <td className="py-2.5 px-3 text-right font-mono tabular-nums">
                             <span
                               className={
-                                iface.rxErrors + iface.txErrors > 0 ? 'text-amber-800 font-semibold' : 'text-[#5C7A6B]'
+                                iface.rxErrors + iface.txErrors > 0
+                                  ? 'text-amber-800 font-semibold'
+                                  : 'text-[var(--fw-text-subtle)]'
                               }
                             >
                               {iface.rxErrors + iface.txErrors}
@@ -667,30 +739,33 @@ export function OverviewView({
             )}
 
             {telemetry.vpns.length > 0 && (
-              <div className="border border-[#D4E4D8] rounded-md overflow-hidden">
-                <div className="bg-[#EDF5EF] px-4 py-2 border-b border-[#D4E4D8] flex items-center justify-between text-xs">
-                  <span className="font-medium text-[#244838] inline-flex items-center gap-1.5">
-                    <Lock className="w-3.5 h-3.5" /> Túneis VPN Site-to-Site & SSL VPN
+              <div className="border border-[var(--fw-border)] rounded-md overflow-hidden">
+                <div className="bg-[var(--fw-surface)] px-4 py-2 border-b border-[var(--fw-border)] flex items-center justify-between text-xs">
+                  <span className="font-medium text-[var(--fw-text-body)] inline-flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5" /> Túneis VPN Site-to-Site &amp; SSL VPN
                   </span>
-                  <span className="text-[#4B6B5C] font-mono tabular-nums">
-                    {telemetry.vpns.filter((v) => v.status === 'up').length}/{telemetry.vpns.length} ativos
+                  <span className="text-[var(--fw-text-muted)] font-mono tabular-nums">
+                    {telemetry.vpns.filter((v) => v.status === 'up').length}/{telemetry.vpns.length}{' '}
+                    ativos
                   </span>
                 </div>
-                <div className="divide-y divide-[#E6F0E8] bg-white">
+                <div className="divide-y divide-[var(--fw-border-soft)] bg-white">
                   {telemetry.vpns.map((vpn) => (
                     <div
                       key={`${vpn.type}-${vpn.name}`}
                       className="px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs"
                     >
                       <div className="min-w-0">
-                        <p className="font-medium text-[#123325]">{vpn.name}</p>
-                        <p className="text-[11px] font-mono text-[#5C7A6B]">
-                          {vpn.type === 'ipsec' ? 'IPSec Site-to-Site' : 'SSL VPN'} · Peer: {vpn.peer}
+                        <p className="font-medium text-[var(--fw-heading)]">{vpn.name}</p>
+                        <p className="text-[11px] font-mono text-[var(--fw-text-subtle)]">
+                          {vpn.type === 'ipsec' ? 'IPSec Site-to-Site' : 'SSL VPN'} · Peer:{' '}
+                          {vpn.peer}
                         </p>
                       </div>
                       <div className="flex items-center gap-4 shrink-0">
-                        <span className="font-mono text-[11px] text-[#456354] tabular-nums">
-                          Rx {formatTrafficBytes(vpn.rxBytes)} / Tx {formatTrafficBytes(vpn.txBytes)}
+                        <span className="font-mono text-[11px] text-[var(--fw-text-muted)] tabular-nums">
+                          Rx {formatTrafficBytes(vpn.rxBytes)} / Tx{' '}
+                          {formatTrafficBytes(vpn.txBytes)}
                         </span>
                         {vpn.status === 'up' ? (
                           <span className="inline-flex items-center gap-1 text-emerald-800 font-semibold font-mono">
@@ -714,13 +789,14 @@ export function OverviewView({
         return (
           <div>
             <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-              <p className="text-xs text-[#4B6B5C] tabular-nums">
-                Distribuição horária de eventos ingeridos · {total24h.toLocaleString('pt-BR')} log(s) nas últimas 24h
+              <p className="text-xs text-[var(--fw-text-muted)] tabular-nums">
+                Distribuição horária de eventos ingeridos · {total24h.toLocaleString('pt-BR')} log(s)
+                nas últimas 24h
               </p>
               <button
                 type="button"
                 onClick={() => onNavigate('syslogs')}
-                className="text-xs font-medium text-[#1E4D3B] hover:underline whitespace-nowrap"
+                className="text-xs font-medium text-[var(--fw-accent)] hover:underline whitespace-nowrap"
               >
                 Explorar syslogs
               </button>
@@ -728,45 +804,48 @@ export function OverviewView({
             <div className="h-72 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={hourlyData} margin={{ top: 8, right: 16, left: -12, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#E2EDE5" vertical={false} />
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke={theme.chartGrid}
+                    vertical={false}
+                  />
                   <XAxis
                     dataKey="hourLabel"
-                    tick={{ fontSize: 11, fill: '#4B6B5C' }}
-                    axisLine={{ stroke: '#D4E4D8' }}
+                    tick={{ fontSize: 11, fill: theme.chartAxis }}
+                    axisLine={{ stroke: theme.chartGrid }}
                     tickLine={false}
                     interval={2}
                   />
                   <YAxis
                     allowDecimals={false}
-                    tick={{ fontSize: 11, fill: '#4B6B5C' }}
+                    tick={{ fontSize: 11, fill: theme.chartAxis }}
                     axisLine={false}
                     tickLine={false}
                   />
                   <Tooltip
                     contentStyle={{
                       backgroundColor: '#FFFFFF',
-                      borderColor: '#BFD5C5',
+                      borderColor: theme.chartGrid,
                       borderRadius: '6px',
                       fontSize: '12px',
-                      color: '#123325',
                     }}
-                    labelStyle={{ fontWeight: 600, color: '#123325', marginBottom: '4px' }}
+                    labelStyle={{ fontWeight: 600, marginBottom: '4px' }}
                   />
                   <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '8px' }} />
                   <Line
                     type="monotone"
                     dataKey="total"
                     name="Total Processado"
-                    stroke="#1E4D3B"
+                    stroke={theme.chartPrimary}
                     strokeWidth={2.25}
-                    dot={{ r: 2.5, fill: '#1E4D3B' }}
+                    dot={{ r: 2.5, fill: theme.chartPrimary }}
                     activeDot={{ r: 4.5 }}
                   />
                   <Line
                     type="monotone"
                     dataKey="allow"
                     name="Permitidos"
-                    stroke="#4CA87A"
+                    stroke={theme.chartAllow}
                     strokeWidth={2}
                     dot={false}
                     activeDot={{ r: 4 }}
@@ -775,7 +854,7 @@ export function OverviewView({
                     type="monotone"
                     dataKey="blocked"
                     name="Bloqueados (Drop/Deny)"
-                    stroke="#DC2626"
+                    stroke={theme.chartBlocked}
                     strokeWidth={1.75}
                     strokeDasharray="4 3"
                     dot={false}
@@ -791,13 +870,14 @@ export function OverviewView({
         return (
           <div className="space-y-5">
             <div className="flex items-center justify-between gap-4">
-              <p className="text-xs text-[#4B6B5C]">
-                Correlação cruzada entre contadores do SonicOS e tráfego observado nos syslogs
+              <p className="text-xs text-[var(--fw-text-muted)]">
+                Correlação cruzada entre contadores do{' '}
+                {vendor === 'fortigate' ? 'FortiOS' : 'SonicOS'} e tráfego observado nos syslogs
               </p>
               <button
                 type="button"
                 onClick={() => onNavigate('reports')}
-                className="inline-flex items-center gap-1.5 text-xs font-medium text-[#1E4D3B] hover:underline whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--fw-accent)] hover:underline whitespace-nowrap shrink-0"
               >
                 <FileBarChart2 className="w-3.5 h-3.5" />
                 Relatório Completo
@@ -806,15 +886,17 @@ export function OverviewView({
 
             <div>
               <div className="flex items-center justify-between text-xs mb-2">
-                <span className="font-medium text-[#1D3B2E]">Proporção de Tráfego nos Syslogs</span>
-                <span className="font-mono text-[#4B6B5C] tabular-nums">
+                <span className="font-medium text-[var(--fw-text-body)]">
+                  Proporção de Tráfego nos Syslogs
+                </span>
+                <span className="font-mono text-[var(--fw-text-muted)] tabular-nums">
                   {allowPct}% Permitido · {blockedPct}% Bloqueado
                 </span>
               </div>
-              <div className="h-2.5 w-full bg-[#E8F1EB] rounded-sm overflow-hidden flex">
+              <div className="h-2.5 w-full bg-[var(--fw-surface-alt)] rounded-sm overflow-hidden flex">
                 <div
-                  className="bg-[#3B8B66] h-full"
-                  style={{ width: `${allowPct}%` }}
+                  className="h-full"
+                  style={{ width: `${allowPct}%`, backgroundColor: theme.chartAllow }}
                   title={`Permitido: ${allowPct}%`}
                 />
                 <div
@@ -826,14 +908,16 @@ export function OverviewView({
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="p-4 bg-[#F4F8F5] rounded-md border border-[#D4E4D8] space-y-2">
-                <p className="text-xs font-medium text-[#1D3B2E]">Regras de Acesso IPv4</p>
+              <div className="p-4 bg-[var(--fw-bg)] rounded-md border border-[var(--fw-border)] space-y-2">
+                <p className="text-xs font-medium text-[var(--fw-text-body)]">
+                  Regras de Acesso IPv4
+                </p>
                 <div className="space-y-1.5 text-xs">
                   <div className="flex items-center justify-between">
                     <span className="inline-flex items-center gap-1.5 text-emerald-800">
                       <CheckCircle2 className="w-3.5 h-3.5" /> Ativas com tráfego
                     </span>
-                    <span className="font-mono tabular-nums text-[#123325]">
+                    <span className="font-mono tabular-nums text-[var(--fw-heading)]">
                       {overview.rulesSummary.active}
                     </span>
                   </div>
@@ -841,7 +925,7 @@ export function OverviewView({
                     <span className="inline-flex items-center gap-1.5 text-amber-800">
                       <AlertTriangle className="w-3.5 h-3.5" /> Sem uso (0 hits)
                     </span>
-                    <span className="font-mono tabular-nums text-[#123325]">
+                    <span className="font-mono tabular-nums text-[var(--fw-heading)]">
                       {overview.rulesSummary.unused}
                     </span>
                   </div>
@@ -849,7 +933,7 @@ export function OverviewView({
                     <span className="inline-flex items-center gap-1.5 text-amber-800">
                       <ShieldAlert className="w-3.5 h-3.5" /> Sombreadas / Desabilitadas
                     </span>
-                    <span className="font-mono tabular-nums text-[#123325]">
+                    <span className="font-mono tabular-nums text-[var(--fw-heading)]">
                       {overview.rulesSummary.shadowed + overview.rulesSummary.disabled}
                     </span>
                   </div>
@@ -857,43 +941,45 @@ export function OverviewView({
                     <span className="inline-flex items-center gap-1.5 text-red-700">
                       <Ban className="w-3.5 h-3.5" /> Permissivas (Any → Any)
                     </span>
-                    <span className="font-mono tabular-nums text-[#123325]">
+                    <span className="font-mono tabular-nums text-[var(--fw-heading)]">
                       {overview.rulesSummary.overpermissive}
                     </span>
                   </div>
                 </div>
               </div>
 
-              <div className="p-4 bg-[#F4F8F5] rounded-md border border-[#D4E4D8] space-y-2">
-                <p className="text-xs font-medium text-[#1D3B2E]">Políticas NAT IPv4</p>
+              <div className="p-4 bg-[var(--fw-bg)] rounded-md border border-[var(--fw-border)] space-y-2">
+                <p className="text-xs font-medium text-[var(--fw-text-body)]">
+                  {vendor === 'fortigate' ? 'VIPs, IP Pools & NAT' : 'Políticas NAT IPv4'}
+                </p>
                 <div className="space-y-1.5 text-xs">
                   <div className="flex items-center justify-between">
                     <span className="inline-flex items-center gap-1.5 text-emerald-800">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> NATs ativos
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Traduções ativas
                     </span>
-                    <span className="font-mono tabular-nums text-[#123325]">
+                    <span className="font-mono tabular-nums text-[var(--fw-heading)]">
                       {overview.natsSummary.active}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="inline-flex items-center gap-1.5 text-amber-800">
-                      <AlertTriangle className="w-3.5 h-3.5" /> NATs sem uso (0 hits)
+                      <AlertTriangle className="w-3.5 h-3.5" /> Sem uso (0 hits)
                     </span>
-                    <span className="font-mono tabular-nums text-[#123325]">
+                    <span className="font-mono tabular-nums text-[var(--fw-heading)]">
                       {overview.natsSummary.unused}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="inline-flex items-center gap-1.5 text-red-700">
-                      <Ban className="w-3.5 h-3.5" /> Órfãs (sem regra de firewall)
+                      <Ban className="w-3.5 h-3.5" /> Órfãs (sem regra associada)
                     </span>
-                    <span className="font-mono tabular-nums text-[#123325]">
+                    <span className="font-mono tabular-nums text-[var(--fw-heading)]">
                       {overview.natsSummary.orphaned}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-[#456354]">Desabilitadas na tabela</span>
-                    <span className="font-mono tabular-nums text-[#123325]">
+                    <span className="text-[var(--fw-text-muted)]">Desabilitadas na tabela</span>
+                    <span className="font-mono tabular-nums text-[var(--fw-heading)]">
                       {overview.natsSummary.disabled}
                     </span>
                   </div>
@@ -905,16 +991,16 @@ export function OverviewView({
 
       case 'top-blocked':
         return overview.topBlockedSources.length === 0 ? (
-          <p className="text-xs text-[#4B6B5C] py-8 text-center">
+          <p className="text-xs text-[var(--fw-text-muted)] py-8 text-center">
             Nenhum bloqueio registrado nos syslogs carregados.
           </p>
         ) : (
-          <div className="divide-y divide-[#E6F0E8]">
+          <div className="divide-y divide-[var(--fw-border-soft)]">
             {overview.topBlockedSources.map((item) => (
               <div key={item.ip} className="py-2.5 flex items-center justify-between text-xs">
                 <div>
-                  <p className="font-mono text-[#123325] font-medium">{item.ip}</p>
-                  <p className="text-[#4B6B5C]">Zona {item.zone}</p>
+                  <p className="font-mono text-[var(--fw-heading)] font-medium">{item.ip}</p>
+                  <p className="text-[var(--fw-text-muted)]">Zona {item.zone}</p>
                 </div>
                 <span className="font-mono tabular-nums text-red-700 font-medium">
                   {item.count.toLocaleString('pt-BR')} drops
@@ -926,23 +1012,25 @@ export function OverviewView({
 
       case 'top-ports':
         return overview.topTargetedPorts.length === 0 ? (
-          <p className="text-xs text-[#4B6B5C] py-6 text-center">Sem portas registradas.</p>
+          <p className="text-xs text-[var(--fw-text-muted)] py-6 text-center">
+            Sem portas registradas.
+          </p>
         ) : (
           <table className="w-full text-xs">
             <thead>
-              <tr className="text-[#4B6B5C] border-b border-[#E6F0E8]">
+              <tr className="text-[var(--fw-text-muted)] border-b border-[var(--fw-border-soft)]">
                 <th className="py-2 text-left font-medium">Serviço / Porta</th>
                 <th className="py-2 text-right font-medium">Total</th>
                 <th className="py-2 text-right font-medium">Bloqueios</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#E6F0E8]">
+            <tbody className="divide-y divide-[var(--fw-border-soft)]">
               {overview.topTargetedPorts.map((row) => (
                 <tr key={`${row.protocol}-${row.port}`}>
-                  <td className="py-2.5 font-mono text-[#123325]">
+                  <td className="py-2.5 font-mono text-[var(--fw-heading)]">
                     {row.protocol}/{row.port}
                   </td>
-                  <td className="py-2.5 text-right font-mono tabular-nums text-[#2C4B3D]">
+                  <td className="py-2.5 text-right font-mono tabular-nums text-[var(--fw-text-body)]">
                     {row.count.toLocaleString('pt-BR')}
                   </td>
                   <td className="py-2.5 text-right font-mono tabular-nums text-red-700">
@@ -956,20 +1044,22 @@ export function OverviewView({
 
       case 'zone-traffic':
         return overview.zoneTraffic.length === 0 ? (
-          <p className="text-xs text-[#4B6B5C] py-6 text-center">Sem fluxos de zona registrados.</p>
+          <p className="text-xs text-[var(--fw-text-muted)] py-6 text-center">
+            Sem fluxos de zona registrados.
+          </p>
         ) : (
           <table className="w-full text-xs">
             <thead>
-              <tr className="text-[#4B6B5C] border-b border-[#E6F0E8]">
+              <tr className="text-[var(--fw-text-muted)] border-b border-[var(--fw-border-soft)]">
                 <th className="py-2 text-left font-medium">Origem → Destino</th>
                 <th className="py-2 text-right font-medium">Permitidos</th>
                 <th className="py-2 text-right font-medium">Bloqueados</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#E6F0E8]">
+            <tbody className="divide-y divide-[var(--fw-border-soft)]">
               {overview.zoneTraffic.map((z) => (
                 <tr key={z.pair}>
-                  <td className="py-2.5 font-mono text-[#123325]">{z.pair}</td>
+                  <td className="py-2.5 font-mono text-[var(--fw-heading)]">{z.pair}</td>
                   <td className="py-2.5 text-right font-mono tabular-nums text-emerald-800">
                     {z.allow.toLocaleString('pt-BR')}
                   </td>
@@ -987,6 +1077,7 @@ export function OverviewView({
   return (
     <div className="space-y-4">
       <OverviewAlertCenter
+        vendor={vendor}
         overview={overview}
         onOverviewUpdated={onOverviewUpdated}
         onInvestigateSyslog={onInvestigateSyslog}
@@ -994,7 +1085,7 @@ export function OverviewView({
       />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-xs text-[#4B6B5C]">
+        <p className="text-xs text-[var(--fw-text-muted)]">
           Arraste os painéis pelo ícone de grade para reorganizar ou alterne entre 1 e 2 colunas.
         </p>
         <div className="flex items-center gap-2">
@@ -1002,7 +1093,7 @@ export function OverviewView({
             <button
               type="button"
               onClick={resetLayout}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1D3B2E] bg-white border border-[#BFD5C5] rounded-md hover:bg-[#EDF5EF] whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] whitespace-nowrap"
             >
               <RotateCcw className="w-3.5 h-3.5" />
               Restaurar Padrão
@@ -1013,8 +1104,8 @@ export function OverviewView({
             onClick={() => setShowWidgetManager((v) => !v)}
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border whitespace-nowrap transition-colors ${
               showWidgetManager
-                ? 'bg-[#1E4D3B] text-white border-[#1E4D3B]'
-                : 'bg-white text-[#1D3B2E] border-[#BFD5C5] hover:bg-[#EDF5EF]'
+                ? 'bg-[var(--fw-accent)] text-white border-[var(--fw-accent)]'
+                : 'bg-white text-[var(--fw-text-body)] border-[var(--fw-border-strong)] hover:bg-[var(--fw-surface)]'
             }`}
           >
             <SlidersHorizontal className="w-3.5 h-3.5" />
@@ -1024,15 +1115,15 @@ export function OverviewView({
       </div>
 
       {showWidgetManager && (
-        <div className="bg-white border border-[#D4E4D8] rounded-lg p-4">
-          <div className="flex items-center justify-between pb-3 border-b border-[#E6F0E8] mb-3">
-            <span className="text-xs font-semibold text-[#123325]">
-              Visibilidade e Largura dos Widgets
+        <div className="bg-white border border-[var(--fw-border)] rounded-lg p-4">
+          <div className="flex items-center justify-between pb-3 border-b border-[var(--fw-border-soft)] mb-3">
+            <span className="text-xs font-semibold text-[var(--fw-heading)]">
+              Visibilidade e Largura dos Widgets ({theme.label})
             </span>
             <button
               type="button"
               onClick={resetLayout}
-              className="text-xs text-[#1E4D3B] hover:underline"
+              className="text-xs text-[var(--fw-accent)] hover:underline"
             >
               Resetar ordem e visibilidade
             </button>
@@ -1041,16 +1132,16 @@ export function OverviewView({
             {layout.map((widget) => (
               <div
                 key={widget.id}
-                className="flex items-center justify-between gap-2 px-3 py-2 bg-[#F4F8F5] border border-[#D4E4D8] rounded-md text-xs"
+                className="flex items-center justify-between gap-2 px-3 py-2 bg-[var(--fw-bg)] border border-[var(--fw-border)] rounded-md text-xs"
               >
-                <span className="font-medium text-[#123325] truncate">
+                <span className="font-medium text-[var(--fw-heading)] truncate">
                   {WIDGET_META[widget.id].title}
                 </span>
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button
                     type="button"
                     onClick={() => toggleSpan(widget.id)}
-                    className="px-2 py-1 text-[11px] font-mono bg-white border border-[#BFD5C5] rounded text-[#2C4B3D] hover:bg-[#EDF5EF]"
+                    className="px-2 py-1 text-[11px] font-mono bg-white border border-[var(--fw-border-strong)] rounded text-[var(--fw-text-body)] hover:bg-[var(--fw-surface)]"
                     title="Alternar largura (1 ou 2 colunas)"
                   >
                     {widget.span === 2 ? '2 col' : '1 col'}
@@ -1060,8 +1151,8 @@ export function OverviewView({
                     onClick={() => toggleVisibility(widget.id)}
                     className={`p-1.5 rounded border transition-colors ${
                       widget.visible
-                        ? 'bg-white border-[#BFD5C5] text-[#1E4D3B] hover:bg-[#EDF5EF]'
-                        : 'bg-[#E5EFE8] border-[#BFD5C5] text-[#6D8B7B]'
+                        ? 'bg-white border-[var(--fw-border-strong)] text-[var(--fw-accent)] hover:bg-[var(--fw-surface)]'
+                        : 'bg-[var(--fw-surface-alt)] border-[var(--fw-border-strong)] text-[var(--fw-text-subtle)]'
                     }`}
                     title={widget.visible ? 'Ocultar widget' : 'Exibir widget'}
                     aria-label={widget.visible ? 'Ocultar widget' : 'Exibir widget'}
@@ -1124,11 +1215,11 @@ export function OverviewView({
                 widget.span === 2 ? 'lg:col-span-2' : 'lg:col-span-1'
               } ${
                 isDropTarget
-                  ? 'border-[#1E4D3B] ring-2 ring-[#2A6B52]/25 bg-[#F4F8F5]'
-                  : 'border-[#D4E4D8]'
+                  ? 'border-[var(--fw-accent)] ring-2 ring-[var(--fw-accent-mid)]/25 bg-[var(--fw-bg)]'
+                  : 'border-[var(--fw-border)]'
               } ${isDragging ? 'opacity-50' : 'opacity-100'}`}
             >
-              <div className="px-5 py-3 border-b border-[#E6F0E8] flex items-center justify-between gap-3">
+              <div className="px-5 py-3 border-b border-[var(--fw-border-soft)] flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 min-w-0">
                   <button
                     type="button"
@@ -1136,11 +1227,11 @@ export function OverviewView({
                     onMouseUp={() => setArmedDragId(null)}
                     aria-label={`Arrastar ${WIDGET_META[widget.id].title}`}
                     title="Arraste para reordenar"
-                    className="p-1 -ml-1 text-[#6D8B7B] hover:text-[#123325] cursor-grab active:cursor-grabbing rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2A6B52]"
+                    className="p-1 -ml-1 text-[var(--fw-text-subtle)] hover:text-[var(--fw-heading)] cursor-grab active:cursor-grabbing rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--fw-accent-mid)]"
                   >
                     <GripVertical className="w-4 h-4" />
                   </button>
-                  <h2 className="text-sm font-semibold text-[#123325] truncate">
+                  <h2 className="text-sm font-semibold text-[var(--fw-heading)] truncate">
                     {WIDGET_META[widget.id].title}
                   </h2>
                 </div>
@@ -1152,7 +1243,7 @@ export function OverviewView({
                     disabled={visibleIdx === 0}
                     title="Mover para cima / esquerda"
                     aria-label={`Mover ${WIDGET_META[widget.id].title} para trás`}
-                    className="p-1.5 text-[#5C7A6B] hover:text-[#123325] hover:bg-[#EDF5EF] rounded disabled:opacity-30"
+                    className="p-1.5 text-[var(--fw-text-subtle)] hover:text-[var(--fw-heading)] hover:bg-[var(--fw-surface)] rounded disabled:opacity-30"
                   >
                     <ArrowUp className="w-3.5 h-3.5" />
                   </button>
@@ -1162,7 +1253,7 @@ export function OverviewView({
                     disabled={visibleIdx === visibleWidgets.length - 1}
                     title="Mover para baixo / direita"
                     aria-label={`Mover ${WIDGET_META[widget.id].title} para frente`}
-                    className="p-1.5 text-[#5C7A6B] hover:text-[#123325] hover:bg-[#EDF5EF] rounded disabled:opacity-30"
+                    className="p-1.5 text-[var(--fw-text-subtle)] hover:text-[var(--fw-heading)] hover:bg-[var(--fw-surface)] rounded disabled:opacity-30"
                   >
                     <ArrowDown className="w-3.5 h-3.5" />
                   </button>
@@ -1171,7 +1262,7 @@ export function OverviewView({
                     onClick={() => toggleSpan(widget.id)}
                     title={widget.span === 2 ? 'Reduzir para 1 coluna' : 'Expandir para 2 colunas'}
                     aria-label="Alternar largura do widget"
-                    className="p-1.5 text-[#5C7A6B] hover:text-[#123325] hover:bg-[#EDF5EF] rounded hidden lg:inline-flex"
+                    className="p-1.5 text-[var(--fw-text-subtle)] hover:text-[var(--fw-heading)] hover:bg-[var(--fw-surface)] rounded hidden lg:inline-flex"
                   >
                     {widget.span === 2 ? (
                       <Minimize2 className="w-3.5 h-3.5" />

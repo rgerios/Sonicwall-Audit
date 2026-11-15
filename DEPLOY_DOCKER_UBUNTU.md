@@ -1,10 +1,11 @@
-# Deploy do SonicAudit no Ubuntu Server com Docker (3 Containers)
+# Deploy do FW Audit no Ubuntu Server com Docker (4 Containers)
 
-Esta arquitetura separa o **SonicAudit** em três containers independentes na mesma rede privada Docker (`sonicaudit_net`):
+Esta arquitetura separa o **FW Audit** em quatro containers independentes na mesma rede privada Docker (`fwaudit_net`):
 
-1. **`sonicaudit-db` (`postgres:16-alpine`)**: Banco de dados PostgreSQL local persistente (volume `sonicaudit_pgdata`).
-2. **`sonicaudit-backend` (`Dockerfile.backend`)**: API Node.js/Express, autenticação, sincronização SonicOS, IA e receptor UDP de Syslogs (`5514/udp`).
-3. **`sonicaudit-frontend` (`Dockerfile.frontend`)**: Nginx servindo o frontend React compilado e fazendo proxy de `/api/` para o container `backend`.
+1. **`fwaudit-db` (`postgres:16-alpine`)**: Banco de dados PostgreSQL compartilhado com isolamento lógico por coluna `vendor` (`sonicwall` / `fortigate`), login único e configurações de IA compartilhadas (volume `fwaudit_pgdata`).
+2. **`fwaudit-backend-sonicwall` (`FW_VENDOR=sonicwall`)**: API SonicOS, parser `.exp`, IA e receptor UDP Syslog dedicado na porta **`5514/udp`**.
+3. **`fwaudit-backend-fortigate` (`FW_VENDOR=fortigate`)**: API REST FortiOS v2 (Bearer Token + VDOM), CLI FortiOS, IA e receptor UDP Syslog dedicado na porta **`5515/udp`**.
+4. **`fwaudit-frontend` (`Dockerfile.frontend`)**: Nginx servindo o painel React unificado (**Azul Pastel** para SonicWall e **Vermelho Pastel** para FortiGate) e roteando `/api/auth/*`, `/api/sonicwall/*` e `/api/fortigate/*`.
 
 ---
 
@@ -42,7 +43,7 @@ cp .env.docker.example .env
 nano .env   # Defina uma senha forte em POSTGRES_PASSWORD
 ```
 
-Suba os 3 containers em segundo plano:
+Suba os 4 containers em segundo plano:
 
 ```bash
 docker compose up -d --build
@@ -52,7 +53,7 @@ Verifique o status e a saúde dos containers:
 
 ```bash
 docker compose ps
-docker compose logs -f backend
+docker compose logs -f backend-sonicwall backend-fortigate
 ```
 
 Acesse no navegador:
@@ -61,39 +62,44 @@ Acesse no navegador:
 http://IP_DO_SERVIDOR_UBUNTU:8080
 ```
 
-Na primeira abertura, crie seu usuário e senha administrativos pela tela inicial (ou defina `SONICAUDIT_ADMIN_USER` / `SONICAUDIT_ADMIN_PASS` no `.env`).
+Na primeira abertura, crie seu usuário e senha únicos pela tela inicial (ou defina `FWAUDIT_ADMIN_USER` / `FWAUDIT_ADMIN_PASS` no `.env`).
 
 ---
 
 ## 3. Regras de Firewall no Ubuntu (UFW)
 
-Libere a porta web e a porta UDP para receber os syslogs dos SonicWalls:
+Libere a porta web e as duas portas UDP dedicadas para receber syslogs dos firewalls SonicWall e FortiGate:
 
 ```bash
-sudo ufw allow 8080/tcp comment "SonicAudit Web UI"
-sudo ufw allow 5514/udp comment "SonicAudit Syslog UDP"
+sudo ufw allow 8080/tcp comment "FW Audit Web UI"
+sudo ufw allow 5514/udp comment "FW Audit SonicWall Syslog UDP"
+sudo ufw allow 5515/udp comment "FW Audit FortiGate Syslog UDP"
 sudo ufw reload
 ```
 
-> **Dica**: Se alterar `FRONTEND_PORT=80` no `.env` (para acessar sem `:8080`), libere `80/tcp` no UFW. No SonicAudit (aba *Conexão & Linux*), ao iniciar o servidor Syslog UDP dentro do container, informe porta **5514** e bind `0.0.0.0`.
+> **Dica**: Dentro do FW Audit (aba *Localidades & Linux*), inicie o socket UDP em `5514` no ambiente SonicWall e em `5515` no ambiente FortiGate, apontando os respectivos firewalls (ou o `rsyslog`) para o IP do servidor Ubuntu.
 
 ---
 
 ## 4. Manutenção Independente por Container
 
-- **Reconstruir apenas o frontend** (sem reiniciar o banco):
+- **Reconstruir apenas o frontend**:
   ```bash
   docker compose up -d --build --no-deps frontend
   ```
-- **Reconstruir apenas o backend** (sem perder conexões do banco):
+- **Reconstruir apenas o backend FortiGate (sem parar SonicWall ou PostgreSQL)**:
   ```bash
-  docker compose up -d --build --no-deps backend
+  docker compose up -d --build --no-deps backend-fortigate
+  ```
+- **Reconstruir apenas o backend SonicWall**:
+  ```bash
+  docker compose up -d --build --no-deps backend-sonicwall
   ```
 - **Backup completo do banco PostgreSQL**:
   ```bash
-  docker exec -t sonicaudit-db pg_dump -U sonicaudit sonicaudit > backup-sonicaudit-$(date +%F).sql
+  docker exec -t fwaudit-db pg_dump -U fwaudit fwaudit > backup-fwaudit-$(date +%F).sql
   ```
 - **Restaurar backup**:
   ```bash
-  cat backup-sonicaudit-AAAA-MM-DD.sql | docker exec -i sonicaudit-db psql -U sonicaudit -d sonicaudit
+  cat backup-fwaudit-AAAA-MM-DD.sql | docker exec -i fwaudit-db psql -U fwaudit -d fwaudit
   ```

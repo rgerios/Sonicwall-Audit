@@ -13,9 +13,13 @@ import type {
   AiProviderType,
   AiPublicConfig,
   AuditOverview,
+  FirewallVendor,
 } from '../types.ts';
+import { vendorApiUrl } from '../utils/vendorApi.ts';
+import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
 
 interface AiAnalystViewProps {
+  vendor: FirewallVendor;
   overview: AuditOverview | null;
   pendingPrompt: string | null;
   onConsumePendingPrompt: () => void;
@@ -51,18 +55,13 @@ const PROVIDER_DEFAULTS: Record<
   },
 };
 
-const QUICK_PROMPTS = [
-  'Explique em linguagem simples os principais bloqueios e alertas críticos dos logs.',
-  'Quais regras de firewall e políticas NAT sem uso devo desabilitar primeiro e por quê?',
-  'Há sinais de ataque, varredura de portas (scan) ou força bruta nos syslogs atuais?',
-  'Gere um resumo executivo curto em linguagem não técnica para apresentar à diretoria.',
-];
-
 export function AiAnalystView({
+  vendor,
   overview,
   pendingPrompt,
   onConsumePendingPrompt,
 }: AiAnalystViewProps) {
+  const theme = VENDOR_THEMES[vendor];
   const [config, setConfig] = useState<AiPublicConfig | null>(null);
   const [provider, setProvider] = useState<AiProviderType>('gemini');
   const [model, setModel] = useState('gemini-4-hydrogen');
@@ -80,9 +79,23 @@ export function AiAnalystView({
 
   const threadEndRef = useRef<HTMLDivElement | null>(null);
 
+  const quickPrompts = [
+    `Explique em linguagem simples os principais bloqueios e alertas críticos dos logs ${theme.label}.`,
+    vendor === 'fortigate'
+      ? 'Quais políticas FortiOS, VIPs e IP Pools sem uso devo desabilitar primeiro e por quê?'
+      : 'Quais regras de firewall e políticas NAT sem uso devo desabilitar primeiro e por quê?',
+    'Há sinais de ataque, varredura de portas (scan) ou força bruta nos syslogs atuais?',
+    'Gere um resumo executivo curto em linguagem não técnica para apresentar à diretoria.',
+  ];
+
+  useEffect(() => {
+    setMessages([]);
+    setChatError(null);
+  }, [vendor]);
+
   useEffect(() => {
     const loadConfig = async () => {
-      const res = await fetch('/api/ai/config');
+      const res = await fetch(vendorApiUrl(vendor, '/ai/config'));
       if (res.ok) {
         const data = (await res.json()) as AiPublicConfig;
         setConfig(data);
@@ -92,7 +105,7 @@ export function AiAnalystView({
       }
     };
     void loadConfig();
-  }, []);
+  }, [vendor]);
 
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -117,7 +130,7 @@ export function AiAnalystView({
     setSavingConfig(true);
     setConfigStatus(null);
     try {
-      const res = await fetch('/api/ai/config', {
+      const res = await fetch(vendorApiUrl(vendor, '/ai/config'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -148,7 +161,7 @@ export function AiAnalystView({
   const handleClearKey = async () => {
     setSavingConfig(true);
     try {
-      const res = await fetch('/api/ai/config', {
+      const res = await fetch(vendorApiUrl(vendor, '/ai/config'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -186,7 +199,7 @@ export function AiAnalystView({
     setChatError(null);
 
     try {
-      const res = await fetch('/api/ai/chat', {
+      const res = await fetch(vendorApiUrl(vendor, '/ai/chat'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -224,15 +237,15 @@ export function AiAnalystView({
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
-      <div className="xl:col-span-2 bg-white border border-[#D4E4D8] rounded-lg flex flex-col h-[calc(100vh-148px)] min-h-[560px] overflow-hidden">
-        <div className="px-5 py-3.5 border-b border-[#D4E4D8] bg-[#EDF5EF] flex flex-wrap items-center justify-between gap-3 shrink-0">
+      <div className="xl:col-span-2 bg-white border border-[var(--fw-border)] rounded-lg flex flex-col h-[calc(100vh-148px)] min-h-[560px] overflow-hidden">
+        <div className="px-5 py-3.5 border-b border-[var(--fw-border)] bg-[var(--fw-surface)] flex flex-wrap items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
-            <Bot className="w-4 h-4 text-[#1E4D3B] shrink-0" />
+            <Bot className="w-4 h-4 text-[var(--fw-accent)] shrink-0" />
             <div className="min-w-0">
-              <h2 className="text-sm font-semibold text-[#123325] truncate">
-                Analista de Logs SonicWall
+              <h2 className="text-sm font-semibold text-[var(--fw-heading)] truncate">
+                Analista de Logs {theme.label}
               </h2>
-              <p className="text-[11px] text-[#4B6B5C] truncate font-mono">
+              <p className="text-[11px] text-[var(--fw-text-muted)] truncate font-mono">
                 {PROVIDER_DEFAULTS[config?.provider || provider].label} ·{' '}
                 {config?.model || model} · Contexto:{' '}
                 {(overview?.totalSyslogs ?? 0).toLocaleString('pt-BR')} logs /{' '}
@@ -248,7 +261,7 @@ export function AiAnalystView({
                 setMessages([]);
                 setChatError(null);
               }}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1D3B2E] bg-white border border-[#BFD5C5] rounded-md hover:bg-[#F4F8F5] whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-bg)] whitespace-nowrap"
             >
               <RotateCcw className="w-3.5 h-3.5" />
               Nova Conversa
@@ -256,28 +269,28 @@ export function AiAnalystView({
           )}
         </div>
 
-        <div className="flex-1 overflow-y-auto p-5 space-y-4 bg-[#F4F8F5]/50">
+        <div className="flex-1 overflow-y-auto p-5 space-y-4 bg-[var(--fw-bg)]/60">
           {messages.length === 0 ? (
             <div className="max-w-2xl mx-auto py-8 space-y-5">
               <div>
-                <h3 className="text-base font-semibold text-[#123325]">
-                  Interpretação em linguagem humana dos seus logs e regras
+                <h3 className="text-base font-semibold text-[var(--fw-heading)]">
+                  Interpretação em linguagem humana dos seus logs e regras ({theme.label})
                 </h3>
-                <p className="text-xs text-[#456354] mt-1.5 leading-relaxed">
+                <p className="text-xs text-[var(--fw-text-muted)] mt-1.5 leading-relaxed">
                   Pergunte sobre qualquer IP, porta, bloqueio de IPS/Antivírus, regra sem uso ou
-                  política NAT. O assistente lê automaticamente os dados carregados no SonicAudit e
+                  política NAT/VIP. O assistente lê automaticamente os dados carregados no FW Audit e
                   mantém o contexto da conversa.
                 </p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {QUICK_PROMPTS.map((prompt) => (
+                {quickPrompts.map((prompt) => (
                   <button
                     key={prompt}
                     type="button"
                     onClick={() => void sendMessage(prompt)}
                     disabled={sending}
-                    className="text-left p-3.5 bg-white border border-[#D4E4D8] rounded-md hover:border-[#9EC2AA] hover:bg-[#EDF5EF]/60 transition-colors text-xs text-[#1D3B2E] leading-snug"
+                    className="text-left p-3.5 bg-white border border-[var(--fw-border)] rounded-md hover:border-[var(--fw-border-strong)] hover:bg-[var(--fw-surface)]/70 transition-colors text-xs text-[var(--fw-text-body)] leading-snug"
                   >
                     {prompt}
                   </button>
@@ -295,13 +308,13 @@ export function AiAnalystView({
                 <div
                   className={`max-w-[85%] rounded-lg px-4 py-3 text-xs leading-relaxed border ${
                     msg.role === 'user'
-                      ? 'bg-[#E3EFE7] border-[#BFD5C5] text-[#123325]'
-                      : 'bg-white border-[#D4E4D8] text-[#162820]'
+                      ? 'bg-[var(--fw-surface-alt)] border-[var(--fw-border-strong)] text-[var(--fw-heading)]'
+                      : 'bg-white border-[var(--fw-border)] text-[var(--fw-text)]'
                   }`}
                 >
                   <p className="whitespace-pre-wrap">{msg.content}</p>
                 </div>
-                <span className="text-[11px] text-[#5C7A6B] mt-1 font-mono tabular-nums">
+                <span className="text-[11px] text-[var(--fw-text-subtle)] mt-1 font-mono tabular-nums">
                   {msg.role === 'user' ? 'Você' : msg.model || 'Assistente'} ·{' '}
                   {new Date(msg.timestamp).toLocaleTimeString('pt-BR', {
                     hour: '2-digit',
@@ -314,8 +327,8 @@ export function AiAnalystView({
 
           {sending && (
             <div className="flex items-start">
-              <div className="bg-white border border-[#D4E4D8] rounded-lg px-4 py-3 text-xs text-[#4B6B5C]">
-                Analisando logs e políticas do SonicWall...
+              <div className="bg-white border border-[var(--fw-border)] rounded-lg px-4 py-3 text-xs text-[var(--fw-text-muted)]">
+                Analisando logs e políticas do {theme.label}...
               </div>
             </div>
           )}
@@ -334,7 +347,7 @@ export function AiAnalystView({
             e.preventDefault();
             void sendMessage();
           }}
-          className="p-4 border-t border-[#D4E4D8] bg-white shrink-0 space-y-2"
+          className="p-4 border-t border-[var(--fw-border)] bg-white shrink-0 space-y-2"
         >
           <div className="flex items-end gap-2">
             <textarea
@@ -343,12 +356,12 @@ export function AiAnalystView({
               onKeyDown={handleKeyDown}
               rows={2}
               placeholder="Pergunte sobre um IP, drop, alerta IPS ou cole uma linha de syslog... (Enter envia)"
-              className="flex-1 px-3 py-2 text-xs border border-[#BFD5C5] rounded-md focus:outline-none focus:ring-2 focus:ring-[#2A6B52] resize-none"
+              className="flex-1 px-3 py-2 text-xs border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)] resize-none"
             />
             <button
               type="submit"
               disabled={sending || !input.trim()}
-              className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C] disabled:opacity-40 whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-40 whitespace-nowrap shrink-0"
             >
               <Send className="w-3.5 h-3.5" />
               Enviar
@@ -359,21 +372,23 @@ export function AiAnalystView({
 
       <form
         onSubmit={handleSaveConfig}
-        className="bg-white border border-[#D4E4D8] rounded-lg p-5 space-y-4"
+        className="bg-white border border-[var(--fw-border)] rounded-lg p-5 space-y-4"
       >
-        <div className="pb-3 border-b border-[#E6F0E8] flex items-center gap-2">
-          <Settings2 className="w-4 h-4 text-[#1E4D3B]" />
+        <div className="pb-3 border-b border-[var(--fw-border-soft)] flex items-center gap-2">
+          <Settings2 className="w-4 h-4 text-[var(--fw-accent)]" />
           <div>
-            <h3 className="text-sm font-semibold text-[#123325]">Provedor de IA e Chave de API</h3>
-            <p className="text-[11px] text-[#4B6B5C]">
-              Armazenado apenas no backend Linux (data/store.json)
+            <h3 className="text-sm font-semibold text-[var(--fw-heading)]">
+              Provedor de IA e Chave de API
+            </h3>
+            <p className="text-[11px] text-[var(--fw-text-muted)]">
+              Compartilhado entre SonicWall e FortiGate no servidor Linux
             </p>
           </div>
         </div>
 
         <div className="space-y-1.5">
-          <label className="block text-xs font-medium text-[#1D3B2E]">Provedor</label>
-          <div className="grid grid-cols-2 gap-1.5 p-1 bg-[#E5EFE8] rounded-md">
+          <label className="block text-xs font-medium text-[var(--fw-text-body)]">Provedor</label>
+          <div className="grid grid-cols-2 gap-1.5 p-1 bg-[var(--fw-surface-alt)] rounded-md">
             {(Object.keys(PROVIDER_DEFAULTS) as AiProviderType[]).map((key) => (
               <button
                 key={key}
@@ -381,8 +396,8 @@ export function AiAnalystView({
                 onClick={() => handleSelectProvider(key)}
                 className={`px-2.5 py-1.5 text-xs font-medium rounded transition-colors truncate ${
                   provider === key
-                    ? 'bg-white text-[#123325] shadow-xs'
-                    : 'text-[#456354] hover:text-[#123325]'
+                    ? 'bg-white text-[var(--fw-heading)] shadow-xs'
+                    : 'text-[var(--fw-text-body)] hover:text-[var(--fw-heading)]'
                 }`}
               >
                 {key === 'local'
@@ -398,12 +413,14 @@ export function AiAnalystView({
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-[#1D3B2E] mb-1">Modelo</label>
+          <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">
+            Modelo
+          </label>
           {provider === 'gemini' ? (
             <select
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              className="w-full px-3 py-2 text-xs font-mono border border-[#BFD5C5] rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-[#2A6B52]"
+              className="w-full px-3 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
             >
               <option value="gemini-4-hydrogen">gemini-4-hydrogen (Análise Geral)</option>
               <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Triagem Rápida)</option>
@@ -414,14 +431,14 @@ export function AiAnalystView({
               value={model}
               onChange={(e) => setModel(e.target.value)}
               placeholder={PROVIDER_DEFAULTS[provider].placeholderModel}
-              className="w-full px-3 py-2 text-xs font-mono border border-[#BFD5C5] rounded-md focus:outline-none focus:ring-2 focus:ring-[#2A6B52]"
+              className="w-full px-3 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
             />
           )}
         </div>
 
         {provider !== 'gemini' && (
           <div>
-            <label className="block text-xs font-medium text-[#1D3B2E] mb-1">
+            <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">
               Endpoint Base (OpenAI-compatível)
             </label>
             <input
@@ -429,10 +446,10 @@ export function AiAnalystView({
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
               placeholder={PROVIDER_DEFAULTS[provider].defaultBaseUrl}
-              className="w-full px-3 py-2 text-xs font-mono border border-[#BFD5C5] rounded-md focus:outline-none focus:ring-2 focus:ring-[#2A6B52]"
+              className="w-full px-3 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
             />
             {provider === 'local' && (
-              <p className="text-[11px] text-[#4B6B5C] mt-1">
+              <p className="text-[11px] text-[var(--fw-text-muted)] mt-1">
                 Ollama: <span className="font-mono">http://127.0.0.1:11434/v1</span> · LM Studio:{' '}
                 <span className="font-mono">http://127.0.0.1:1234/v1</span>
               </p>
@@ -441,11 +458,11 @@ export function AiAnalystView({
         )}
 
         <div>
-          <label className="block text-xs font-medium text-[#1D3B2E] mb-1">
+          <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">
             Chave de API {provider === 'local' ? '(Opcional para servidor local)' : ''}
           </label>
           <div className="relative">
-            <KeyRound className="w-3.5 h-3.5 text-[#6D8B7B] absolute left-3 top-1/2 -translate-y-1/2" />
+            <KeyRound className="w-3.5 h-3.5 text-[var(--fw-text-subtle)] absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="password"
               value={apiKeyInput}
@@ -459,11 +476,11 @@ export function AiAnalystView({
                       ? 'Opcional (vazio para Ollama)'
                       : 'Cole sua chave de API aqui'
               }
-              className="w-full pl-9 pr-3 py-2 text-xs font-mono border border-[#BFD5C5] rounded-md focus:outline-none focus:ring-2 focus:ring-[#2A6B52]"
+              className="w-full pl-9 pr-3 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
             />
           </div>
 
-          <div className="mt-2 flex items-center justify-between text-[11px] text-[#4B6B5C]">
+          <div className="mt-2 flex items-center justify-between text-[11px] text-[var(--fw-text-muted)]">
             <span>
               {config?.hasCustomKey
                 ? `Chave salva: ${config.maskedKey}`
@@ -489,7 +506,7 @@ export function AiAnalystView({
           <div
             className={`p-3 rounded-md border text-xs flex items-start gap-2 ${
               configStatus.type === 'ok'
-                ? 'bg-[#E7F2EA] border-[#B6D4BE] text-[#143D2C]'
+                ? 'bg-[var(--fw-surface)] border-[var(--fw-border-strong)] text-[var(--fw-heading)]'
                 : 'bg-red-50 border-red-200 text-red-800'
             }`}
           >
@@ -501,7 +518,7 @@ export function AiAnalystView({
         <button
           type="submit"
           disabled={savingConfig}
-          className="w-full py-2 px-4 text-xs font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C] disabled:opacity-50"
+          className="w-full py-2 px-4 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-50"
         >
           {savingConfig ? 'Salvando...' : 'Salvar Configuração de IA'}
         </button>

@@ -44,16 +44,16 @@ export function AccountPasswordModal({ username, onClose }: AccountPasswordModal
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-[#0E221A]/45 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 bg-slate-950/45 flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
       aria-label="Alterar Senha de Acesso"
     >
-      <div className="w-full max-w-md bg-white border border-[#D4E4D8] rounded-lg overflow-hidden">
-        <div className="px-5 py-3.5 bg-[#EDF5EF] border-b border-[#D4E4D8] flex items-center justify-between">
+      <div className="w-full max-w-md bg-white border border-[var(--fw-border)] rounded-lg overflow-hidden">
+        <div className="px-5 py-3.5 bg-[var(--fw-surface)] border-b border-[var(--fw-border)] flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <KeyRound className="w-4 h-4 text-[#1E4D3B]" />
-            <h2 className="text-sm font-semibold text-[#123325]">
+            <KeyRound className="w-4 h-4 text-[var(--fw-accent)]" />
+            <h2 className="text-sm font-semibold text-[var(--fw-heading)]">
               Alterar Senha ({username})
             </h2>
           </div>
@@ -61,7 +61,7 @@ export function AccountPasswordModal({ username, onClose }: AccountPasswordModal
             type="button"
             onClick={onClose}
             aria-label="Fechar janela"
-            className="p-1 text-[#4B6B5C] hover:text-[#123325] rounded"
+            className="p-1 text-[var(--fw-text-muted)] hover:text-[var(--fw-heading)] rounded"
           >
             <X className="w-4 h-4" />
           </button>
@@ -69,18 +69,18 @@ export function AccountPasswordModal({ username, onClose }: AccountPasswordModal
 
         <form onSubmit={(e) => void handleSubmit(e)} className="p-5 space-y-3.5">
           <div>
-            <label className="block text-xs font-medium text-[#1D3B2E] mb-1">Senha Atual</label>
+            <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">Senha Atual</label>
             <input
               type="password"
               value={currentPassword}
               onChange={(e) => setCurrentPassword(e.target.value)}
               required
               autoComplete="current-password"
-              className="w-full px-3 py-2 text-xs border border-[#BFD5C5] rounded-md"
+              className="w-full px-3 py-2 text-xs border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-[#1D3B2E] mb-1">
+            <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">
               Nova Senha (mín. 6 caracteres)
             </label>
             <input
@@ -90,11 +90,11 @@ export function AccountPasswordModal({ username, onClose }: AccountPasswordModal
               required
               minLength={6}
               autoComplete="new-password"
-              className="w-full px-3 py-2 text-xs border border-[#BFD5C5] rounded-md"
+              className="w-full px-3 py-2 text-xs border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-[#1D3B2E] mb-1">
+            <label className="block text-xs font-medium text-[var(--fw-text-body)] mb-1">
               Confirmar Nova Senha
             </label>
             <input
@@ -104,7 +104,7 @@ export function AccountPasswordModal({ username, onClose }: AccountPasswordModal
               required
               minLength={6}
               autoComplete="new-password"
-              className="w-full px-3 py-2 text-xs border border-[#BFD5C5] rounded-md"
+              className="w-full px-3 py-2 text-xs border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
             />
           </div>
 
@@ -112,7 +112,7 @@ export function AccountPasswordModal({ username, onClose }: AccountPasswordModal
             <div
               className={`p-3 rounded-md border text-xs ${
                 feedback.type === 'ok'
-                  ? 'bg-[#E7F2EA] border-[#B6D4BE] text-[#143D2C]'
+                  ? 'bg-[var(--fw-surface)] border-[var(--fw-border-strong)] text-[var(--fw-heading)]'
                   : 'bg-red-50 border-red-200 text-red-800'
               }`}
             >
@@ -124,14 +124,14 @@ export function AccountPasswordModal({ username, onClose }: AccountPasswordModal
             <button
               type="button"
               onClick={onClose}
-              className="px-3.5 py-2 text-xs font-medium text-[#1D3B2E] bg-white border border-[#BFD5C5] rounded-md hover:bg-[#F4F8F5]"
+              className="px-3.5 py-2 text-xs font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-bg)]"
             >
               Fechar
             </button>
             <button
               type="submit"
               disabled={saving}
-              className="px-4 py-2 text-xs font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C] disabled:opacity-50"
+              className="px-4 py-2 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-50"
             >
               {saving ? 'Salvando...' : 'Salvar Nova Senha'}
             </button>

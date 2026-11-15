@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Check, Copy, Download, X } from 'lucide-react';
+import type { FirewallVendor } from '../types.ts';
 
 interface CliScriptModalProps {
+  vendor: FirewallVendor;
   title: string;
   script: string;
   mode: 'disable' | 'delete';
@@ -10,6 +12,7 @@ interface CliScriptModalProps {
 }
 
 export function CliScriptModal({
+  vendor,
   title,
   script,
   mode,
@@ -33,47 +36,48 @@ export function CliScriptModal({
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `sonicos-remediation-${mode}.txt`;
+    const prefix = vendor === 'fortigate' ? 'fortios' : 'sonicos';
+    anchor.download = `${prefix}-remediation-${mode}.txt`;
     anchor.click();
     URL.revokeObjectURL(url);
   };
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-[#0E221A]/50 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 bg-slate-950/50 flex items-center justify-center p-4"
       role="dialog"
       aria-modal="true"
       aria-labelledby="cli-modal-title"
     >
-      <div className="bg-white border border-[#D4E4D8] rounded-lg w-full max-w-3xl overflow-hidden shadow-lg">
-        <div className="px-6 py-4 border-b border-[#D4E4D8] flex items-center justify-between gap-4">
+      <div className="bg-white border border-[var(--fw-border)] rounded-lg w-full max-w-3xl overflow-hidden shadow-lg">
+        <div className="px-6 py-4 border-b border-[var(--fw-border)] flex items-center justify-between gap-4">
           <div>
-            <h2 id="cli-modal-title" className="text-base font-semibold text-[#123325]">
+            <h2 id="cli-modal-title" className="text-base font-semibold text-[var(--fw-heading)]">
               {title}
             </h2>
-            <p className="text-xs text-[#4B6B5C] mt-0.5">
+            <p className="text-xs text-[var(--fw-text-muted)] mt-0.5">
               Recomendado desabilitar primeiro e monitorar por 7 a 14 dias antes da remoção definitiva.
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 text-[#4B6B5C] hover:text-[#123325] rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2A6B52]"
+            className="p-2 text-[var(--fw-text-muted)] hover:text-[var(--fw-heading)] rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--fw-accent-mid)]"
             aria-label="Fechar modal"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="px-6 py-3 bg-[#EDF5EF] border-b border-[#D4E4D8] flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-1 p-1 bg-[#DCECE1] rounded-md">
+        <div className="px-6 py-3 bg-[var(--fw-surface)] border-b border-[var(--fw-border)] flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-1 p-1 bg-[var(--fw-surface-chip)] rounded-md">
             <button
               type="button"
               onClick={() => onModeChange('disable')}
               className={`px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap ${
                 mode === 'disable'
-                  ? 'bg-white text-[#123325] shadow-xs'
-                  : 'text-[#456354] hover:text-[#123325]'
+                  ? 'bg-white text-[var(--fw-heading)] shadow-xs'
+                  : 'text-[var(--fw-text-body)] hover:text-[var(--fw-heading)]'
               }`}
             >
               Desabilitar (Seguro)
@@ -84,7 +88,7 @@ export function CliScriptModal({
               className={`px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap ${
                 mode === 'delete'
                   ? 'bg-white text-red-700 shadow-xs'
-                  : 'text-[#456354] hover:text-[#123325]'
+                  : 'text-[var(--fw-text-body)] hover:text-[var(--fw-heading)]'
               }`}
             >
               Remover Definitivamente
@@ -95,7 +99,7 @@ export function CliScriptModal({
             <button
               type="button"
               onClick={handleCopy}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#1D3B2E] bg-white border border-[#BFD5C5] rounded-md hover:bg-[#F4F8F5] whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-bg)] whitespace-nowrap"
             >
               {copied ? <Check className="w-3.5 h-3.5 text-emerald-700" /> : <Copy className="w-3.5 h-3.5" />}
               {copied ? 'Copiado' : 'Copiar CLI'}
@@ -103,7 +107,7 @@ export function CliScriptModal({
             <button
               type="button"
               onClick={handleDownload}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C] whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] whitespace-nowrap"
             >
               <Download className="w-3.5 h-3.5" />
               Baixar .txt
@@ -111,7 +115,7 @@ export function CliScriptModal({
           </div>
         </div>
 
-        <div className="p-6 bg-[#0E221A] text-[#E6F2EB] max-h-[420px] overflow-auto">
+        <div className="p-6 bg-[var(--fw-terminal-bg)] text-[var(--fw-terminal-text)] max-h-[420px] overflow-auto">
           <pre className="font-mono text-xs leading-6 whitespace-pre-wrap">{script}</pre>
         </div>
       </div>

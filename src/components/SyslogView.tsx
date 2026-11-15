@@ -11,9 +11,12 @@ import {
   Search,
   Trash2,
 } from 'lucide-react';
-import type { SyslogEvent } from '../types.ts';
+import type { FirewallVendor, SyslogEvent } from '../types.ts';
+import { vendorApiUrl } from '../utils/vendorApi.ts';
+import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
 
 interface SyslogViewProps {
+  vendor: FirewallVendor;
   refreshToken: number;
   onDataChanged: () => void;
   onAnalyzeEvent: (rawEventText: string) => void;
@@ -22,12 +25,14 @@ interface SyslogViewProps {
 }
 
 export function SyslogView({
+  vendor,
   refreshToken,
   onDataChanged,
   onAnalyzeEvent,
   pendingQuery,
   onConsumePendingQuery,
 }: SyslogViewProps) {
+  const theme = VENDOR_THEMES[vendor];
   const [events, setEvents] = useState<SyslogEvent[]>([]);
   const [total, setTotal] = useState(0);
   const [matched, setMatched] = useState(0);
@@ -42,6 +47,11 @@ export function SyslogView({
   const [pasteText, setPasteText] = useState('');
   const [ingesting, setIngesting] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+
+  useEffect(() => {
+    setExpandedId(null);
+    setFeedback(null);
+  }, [vendor]);
 
   useEffect(() => {
     if (pendingQuery) {
@@ -61,7 +71,7 @@ export function SyslogView({
         severity: severityFilter,
         limit: '250',
       });
-      const res = await fetch(`/api/syslogs?${params.toString()}`);
+      const res = await fetch(vendorApiUrl(vendor, `/syslogs?${params.toString()}`));
       if (res.ok) {
         const data = await res.json();
         setEvents(data.events || []);
@@ -75,7 +85,7 @@ export function SyslogView({
 
   useEffect(() => {
     void fetchLogs();
-  }, [query, actionFilter, severityFilter, refreshToken]);
+  }, [vendor, query, actionFilter, severityFilter, refreshToken]);
 
   const handleFileUpload = async (file: File | undefined) => {
     if (!file) return;
@@ -83,7 +93,7 @@ export function SyslogView({
     setFeedback(null);
     try {
       const content = await file.text();
-      const res = await fetch('/api/syslogs/ingest', {
+      const res = await fetch(vendorApiUrl(vendor, '/syslogs/ingest'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, source: 'upload' }),
@@ -111,7 +121,7 @@ export function SyslogView({
     setIngesting(true);
     setFeedback(null);
     try {
-      const res = await fetch('/api/syslogs/ingest', {
+      const res = await fetch(vendorApiUrl(vendor, '/syslogs/ingest'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: pasteText, source: 'paste' }),
@@ -135,7 +145,7 @@ export function SyslogView({
   };
 
   const handleClearLogs = async () => {
-    await fetch('/api/syslogs', { method: 'DELETE' });
+    await fetch(vendorApiUrl(vendor, '/syslogs'), { method: 'DELETE' });
     onDataChanged();
     await fetchLogs();
   };
@@ -156,28 +166,33 @@ export function SyslogView({
       );
     }
     return (
-      <span className="inline-flex items-center gap-1.5 text-[#456354] font-medium">
+      <span className="inline-flex items-center gap-1.5 text-[var(--fw-text-muted)] font-medium">
         <Info className="w-3.5 h-3.5 shrink-0" /> Sistema
       </span>
     );
   };
 
+  const pastePlaceholder =
+    vendor === 'fortigate'
+      ? '<189>date=2026-11-13 time=10:05:11 devname="FGT100F-MATRIZ" devid="FG100FTK21004512" logid="0000000013" type="traffic" subtype="forward" level="notice" vd="root" srcip=10.20.1.50 srcport=55120 srcintf="port1" dstip=8.8.8.8 dstport=53 dstintf="wan1" proto=17 policyid=12 policyname="LAN-to-WAN-DNS" action="accept" sentbyte=142 rcvdbyte=290 msg="Allowed"'
+      : '<134>id=firewall sn=2CB8ED549A10 time="2026-11-13 10:05:11" fw=192.168.10.1 pri=6 c=1024 m=537 msg="Connection Closed" src=10.20.1.50:55120:X0 dst=8.8.8.8:53:X1 proto=udp/dns fw_action="allow"';
+
   return (
     <div className="space-y-4">
-      <div className="bg-white border border-[#D4E4D8] rounded-lg p-4 flex flex-wrap items-center justify-between gap-4">
+      <div className="bg-white border border-[var(--fw-border)] rounded-lg p-4 flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3 flex-1 min-w-[260px]">
           <div className="relative flex-1 min-w-[220px] max-w-md">
-            <Search className="w-4 h-4 text-[#6D8B7B] absolute left-3 top-1/2 -translate-y-1/2" />
+            <Search className="w-4 h-4 text-[var(--fw-text-subtle)] absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Filtrar IP, porta, regra, mensagem..."
-              className="w-full pl-9 pr-3 py-2 text-xs border border-[#BFD5C5] rounded-md focus:outline-none focus:ring-2 focus:ring-[#2A6B52]"
+              className="w-full pl-9 pr-3 py-2 text-xs border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
             />
           </div>
 
-          <div className="flex items-center gap-1 p-1 bg-[#E5EFE8] rounded-md">
+          <div className="flex items-center gap-1 p-1 bg-[var(--fw-surface-alt)] rounded-md">
             {[
               { id: 'all', label: 'Todos' },
               { id: 'allow', label: 'Permitidos' },
@@ -190,8 +205,8 @@ export function SyslogView({
                 onClick={() => setActionFilter(tab.id)}
                 className={`px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap ${
                   actionFilter === tab.id
-                    ? 'bg-white text-[#123325] shadow-xs'
-                    : 'text-[#456354] hover:text-[#123325]'
+                    ? 'bg-white text-[var(--fw-heading)] shadow-xs'
+                    : 'text-[var(--fw-text-body)] hover:text-[var(--fw-heading)]'
                 }`}
               >
                 {tab.label}
@@ -203,7 +218,7 @@ export function SyslogView({
             value={severityFilter}
             onChange={(e) => setSeverityFilter(e.target.value)}
             aria-label="Filtrar por severidade"
-            className="px-3 py-2 text-xs border border-[#BFD5C5] rounded-md bg-white text-[#1D3B2E] focus:outline-none focus:ring-2 focus:ring-[#2A6B52]"
+            className="px-3 py-2 text-xs border border-[var(--fw-border-strong)] rounded-md bg-white text-[var(--fw-text-body)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
           >
             <option value="all">Todas severidades</option>
             <option value="critical">Crítico</option>
@@ -215,7 +230,7 @@ export function SyslogView({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          <label className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#1D3B2E] bg-[#F4F8F5] border border-[#BFD5C5] rounded-md hover:bg-[#E7F2EA] cursor-pointer whitespace-nowrap">
+          <label className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] cursor-pointer whitespace-nowrap">
             <FileUp className="w-3.5 h-3.5" />
             Importar .log/.txt
             <input
@@ -228,14 +243,14 @@ export function SyslogView({
           <button
             type="button"
             onClick={() => setShowPasteBox((v) => !v)}
-            className="px-3 py-2 text-xs font-medium text-[#1D3B2E] bg-white border border-[#BFD5C5] rounded-md hover:bg-[#EDF5EF] whitespace-nowrap"
+            className="px-3 py-2 text-xs font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] whitespace-nowrap"
           >
             Colar Logs
           </button>
           <button
             type="button"
             onClick={() => void fetchLogs()}
-            className="p-2 text-[#2C4B3D] bg-white border border-[#BFD5C5] rounded-md hover:bg-[#EDF5EF]"
+            className="p-2 text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)]"
             title="Atualizar"
             aria-label="Atualizar lista de syslogs"
           >
@@ -245,7 +260,7 @@ export function SyslogView({
             <button
               type="button"
               onClick={() => void handleClearLogs()}
-              className="p-2 text-red-700 bg-white border border-[#BFD5C5] rounded-md hover:bg-red-50"
+              className="p-2 text-red-700 bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-red-50"
               title="Limpar syslogs"
               aria-label="Limpar todos os syslogs"
             >
@@ -259,7 +274,7 @@ export function SyslogView({
         <div
           className={`px-4 py-3 rounded-md border text-xs ${
             feedback.type === 'ok'
-              ? 'bg-[#E7F2EA] border-[#B6D4BE] text-[#143D2C]'
+              ? 'bg-[var(--fw-surface)] border-[var(--fw-border-strong)] text-[var(--fw-heading)]'
               : 'bg-red-50 border-red-200 text-red-800'
           }`}
         >
@@ -268,15 +283,19 @@ export function SyslogView({
       )}
 
       {showPasteBox && (
-        <div className="bg-white border border-[#D4E4D8] rounded-lg p-4 space-y-3">
+        <div className="bg-white border border-[var(--fw-border)] rounded-lg p-4 space-y-3">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-medium text-[#123325]">
-              Cole linhas brutas do rsyslog ou exportação SonicWall (<span className="font-mono">id=firewall ...</span>)
+            <p className="text-xs font-medium text-[var(--fw-heading)]">
+              Cole linhas brutas do rsyslog ou exportação {theme.label} (
+              <span className="font-mono">
+                {vendor === 'fortigate' ? 'date=... devname=... srcip=...' : 'id=firewall ...'}
+              </span>
+              )
             </p>
             <button
               type="button"
               onClick={() => setShowPasteBox(false)}
-              className="text-xs text-[#4B6B5C] hover:text-[#123325]"
+              className="text-xs text-[var(--fw-text-muted)] hover:text-[var(--fw-heading)]"
             >
               Fechar
             </button>
@@ -285,15 +304,15 @@ export function SyslogView({
             value={pasteText}
             onChange={(e) => setPasteText(e.target.value)}
             rows={5}
-            placeholder='<134>id=firewall sn=2CB8ED549A10 time="2026-11-13 10:05:11" fw=192.168.10.1 pri=6 c=1024 m=537 msg="Connection Closed" src=10.20.1.50:55120:X0 dst=8.8.8.8:53:X1 proto=udp/dns fw_action="allow"'
-            className="w-full p-3 font-mono text-xs border border-[#BFD5C5] rounded-md focus:outline-none focus:ring-2 focus:ring-[#2A6B52]"
+            placeholder={pastePlaceholder}
+            className="w-full p-3 font-mono text-xs border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
           />
           <div className="flex justify-end">
             <button
               type="button"
               disabled={ingesting || !pasteText.trim()}
               onClick={() => void handlePasteSubmit()}
-              className="px-4 py-2 text-xs font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C] disabled:opacity-50"
+              className="px-4 py-2 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-50"
             >
               {ingesting ? 'Processando...' : 'Analisar Linhas'}
             </button>
@@ -301,34 +320,37 @@ export function SyslogView({
         </div>
       )}
 
-      <div className="bg-white border border-[#D4E4D8] rounded-lg overflow-hidden">
-        <div className="px-4 py-2.5 border-b border-[#D4E4D8] bg-[#EDF5EF] flex items-center justify-between text-xs text-[#2C4B3D]">
+      <div className="bg-white border border-[var(--fw-border)] rounded-lg overflow-hidden">
+        <div className="px-4 py-2.5 border-b border-[var(--fw-border)] bg-[var(--fw-surface)] flex items-center justify-between text-xs text-[var(--fw-text-body)]">
           <span className="tabular-nums">
             Exibindo {events.length.toLocaleString('pt-BR')} de{' '}
             {matched.toLocaleString('pt-BR')} correspondências ({total.toLocaleString('pt-BR')} total)
           </span>
-          <span>Expurgo automático ativo (10 dias) · Clique na linha para ver detalhes</span>
+          <span>Expurgo automático ativo · Porta UDP :{theme.defaultUdpPort} · Clique para expandir</span>
         </div>
 
         {loading ? (
           <div className="p-6 space-y-2 animate-pulse">
             {[1, 2, 3, 4, 5].map((n) => (
-              <div key={n} className="h-9 bg-[#EDF5EF] rounded" />
+              <div key={n} className="h-9 bg-[var(--fw-surface)] rounded" />
             ))}
           </div>
         ) : events.length === 0 ? (
           <div className="p-10 text-center">
-            <p className="text-sm font-medium text-[#123325]">Nenhum evento de syslog encontrado</p>
-            <p className="text-xs text-[#4B6B5C] mt-1">
-              Importe um arquivo de log do Linux (<span className="font-mono">/var/log/sonicwall.log</span>),
-              cole linhas acima ou ative o receptor UDP.
+            <p className="text-sm font-medium text-[var(--fw-heading)]">
+              Nenhum evento de syslog {theme.label} encontrado
+            </p>
+            <p className="text-xs text-[var(--fw-text-muted)] mt-1">
+              Importe um arquivo de log (<span className="font-mono">/var/log/{vendor}.log</span>),
+              cole linhas acima ou inicie o receptor UDP na porta{' '}
+              <span className="font-mono">{theme.defaultUdpPort}</span>.
             </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-[#D4E4D8] text-[#456354] bg-[#F4F8F5]">
+                <tr className="border-b border-[var(--fw-border)] text-[var(--fw-text-muted)] bg-[var(--fw-bg)]">
                   <th className="py-2.5 pl-4 pr-2 text-left font-medium w-8" />
                   <th className="py-2.5 px-3 text-left font-medium">Data / Hora</th>
                   <th className="py-2.5 px-3 text-left font-medium">Ação</th>
@@ -339,80 +361,83 @@ export function SyslogView({
                   <th className="py-2.5 px-4 text-left font-medium">Mensagem</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#E6F0E8]">
+              <tbody className="divide-y divide-[var(--fw-border-soft)]">
                 {events.map((ev) => {
                   const isOpen = expandedId === ev.id;
                   return (
                     <Fragment key={ev.id}>
                       <tr
                         onClick={() => setExpandedId(isOpen ? null : ev.id)}
-                        className="hover:bg-[#F6FAF7] cursor-pointer transition-colors"
+                        className="hover:bg-[var(--fw-bg)] cursor-pointer transition-colors"
                       >
-                        <td className="py-2.5 pl-4 pr-2 text-[#6D8B7B]">
+                        <td className="py-2.5 pl-4 pr-2 text-[var(--fw-text-subtle)]">
                           {isOpen ? (
                             <ChevronDown className="w-3.5 h-3.5" />
                           ) : (
                             <ChevronRight className="w-3.5 h-3.5" />
                           )}
                         </td>
-                        <td className="py-2.5 px-3 font-mono text-[#456354] whitespace-nowrap tabular-nums">
+                        <td className="py-2.5 px-3 font-mono text-[var(--fw-text-muted)] whitespace-nowrap tabular-nums">
                           {ev.timestamp}
                         </td>
                         <td className="py-2.5 px-3 whitespace-nowrap">{renderActionLabel(ev.action)}</td>
-                        <td className="py-2.5 px-3 font-mono text-[#123325] whitespace-nowrap">
+                        <td className="py-2.5 px-3 font-mono text-[var(--fw-heading)] whitespace-nowrap">
                           {ev.srcIp}
                           {ev.srcPort ? `:${ev.srcPort}` : ''}
                           {ev.srcZone !== '-' && (
-                            <span className="text-[#6D8B7B] ml-1">({ev.srcZone})</span>
+                            <span className="text-[var(--fw-text-subtle)] ml-1">({ev.srcZone})</span>
                           )}
                         </td>
-                        <td className="py-2.5 px-3 font-mono text-[#123325] whitespace-nowrap">
+                        <td className="py-2.5 px-3 font-mono text-[var(--fw-heading)] whitespace-nowrap">
                           {ev.dstIp}
                           {ev.dstPort ? `:${ev.dstPort}` : ''}
                           {ev.dstZone !== '-' && (
-                            <span className="text-[#6D8B7B] ml-1">({ev.dstZone})</span>
+                            <span className="text-[var(--fw-text-subtle)] ml-1">({ev.dstZone})</span>
                           )}
                         </td>
-                        <td className="py-2.5 px-3 font-mono text-[#2C4B3D] whitespace-nowrap">
+                        <td className="py-2.5 px-3 font-mono text-[var(--fw-text-body)] whitespace-nowrap">
                           {ev.protocol}
                           {ev.dstPort !== null ? `/${ev.dstPort}` : ''}
                         </td>
-                        <td className="py-2.5 px-3 font-mono text-[#456354] whitespace-nowrap">
+                        <td className="py-2.5 px-3 font-mono text-[var(--fw-text-muted)] whitespace-nowrap">
                           {ev.ruleRef || '-'}
                           {ev.natRuleRef ? ` · ${ev.natRuleRef}` : ''}
                         </td>
-                        <td className="py-2.5 px-4 text-[#2C4B3D] max-w-xs truncate">
+                        <td className="py-2.5 px-4 text-[var(--fw-text-body)] max-w-xs truncate">
                           {ev.message}
                         </td>
                       </tr>
                       {isOpen && (
-                        <tr className="bg-[#F4F8F5]">
-                          <td colSpan={8} className="px-6 py-4 border-t border-[#D4E4D8]">
+                        <tr className="bg-[var(--fw-bg)]">
+                          <td colSpan={8} className="px-6 py-4 border-t border-[var(--fw-border)]">
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs mb-3">
                               <div>
-                                <span className="text-[#4B6B5C]">Categoria:</span>{' '}
-                                <span className="text-[#123325] font-medium">{ev.categoryName}</span>
+                                <span className="text-[var(--fw-text-muted)]">Categoria:</span>{' '}
+                                <span className="text-[var(--fw-heading)] font-medium">
+                                  {ev.categoryName}
+                                </span>
                               </div>
                               <div>
-                                <span className="text-[#4B6B5C]">Severidade:</span>{' '}
-                                <span className="font-mono text-[#123325]">
+                                <span className="text-[var(--fw-text-muted)]">Severidade:</span>{' '}
+                                <span className="font-mono text-[var(--fw-heading)]">
                                   {ev.severity} (pri {ev.priority})
                                 </span>
                               </div>
                               <div>
-                                <span className="text-[#4B6B5C]">Bytes Env/Rec:</span>{' '}
-                                <span className="font-mono tabular-nums text-[#123325]">
-                                  {ev.bytesSent.toLocaleString('pt-BR')} / {ev.bytesRcvd.toLocaleString('pt-BR')}
+                                <span className="text-[var(--fw-text-muted)]">Bytes Env/Rec:</span>{' '}
+                                <span className="font-mono tabular-nums text-[var(--fw-heading)]">
+                                  {ev.bytesSent.toLocaleString('pt-BR')} /{' '}
+                                  {ev.bytesRcvd.toLocaleString('pt-BR')}
                                 </span>
                               </div>
                               <div>
-                                <span className="text-[#4B6B5C]">NAT Traduzido:</span>{' '}
-                                <span className="font-mono text-[#123325]">
+                                <span className="text-[var(--fw-text-muted)]">NAT Traduzido:</span>{' '}
+                                <span className="font-mono text-[var(--fw-heading)]">
                                   {ev.natSrcIp || ev.natDstIp || 'Nenhum'}
                                 </span>
                               </div>
                             </div>
-                            <pre className="p-3 bg-[#0E221A] text-[#E6F2EB] rounded-md font-mono text-[11px] overflow-x-auto whitespace-pre-wrap">
+                            <pre className="p-3 bg-[var(--fw-terminal-bg)] text-[var(--fw-terminal-text)] rounded-md font-mono text-[11px] overflow-x-auto whitespace-pre-wrap">
                               {ev.raw}
                             </pre>
                             <div className="mt-3 flex justify-end">
@@ -421,10 +446,10 @@ export function SyslogView({
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onAnalyzeEvent(
-                                    `Explique este evento de syslog do SonicWall em linguagem humana, avalie se há risco e indique o que fazer:\n\n${ev.raw}`
+                                    `Explique este evento de syslog do ${theme.label} em linguagem humana, avalie se há risco e indique o que fazer:\n\n${ev.raw}`
                                   );
                                 }}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[#1E4D3B] rounded-md hover:bg-[#163A2C]"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)]"
                               >
                                 <Bot className="w-3.5 h-3.5" />
                                 Analisar este evento com IA

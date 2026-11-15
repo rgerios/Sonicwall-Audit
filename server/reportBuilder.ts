@@ -1,3 +1,4 @@
+import { generateFortiOsCli } from './fortigateParsers.ts';
 import { generateSonicOsCli } from './parsers.ts';
 import type {
   AuditOverview,
@@ -91,7 +92,10 @@ export function buildAuditReport(
 
   const flaggedRules = rules.filter((r) => r.status !== 'active');
   const flaggedNats = nats.filter((n) => n.status !== 'active');
-  const cliDisableScript = generateSonicOsCli(flaggedRules, flaggedNats, 'disable');
+  const cliDisableScript =
+    overview.vendor === 'fortigate'
+      ? generateFortiOsCli(flaggedRules, flaggedNats, 'disable')
+      : generateSonicOsCli(flaggedRules, flaggedNats, 'disable');
 
   return {
     generatedAt: new Date().toISOString(),
@@ -107,10 +111,12 @@ export function buildAuditReport(
 export function renderReportMarkdown(report: AuditReportData): string {
   const { overview } = report;
   const ap = overview.appliance;
+  const vendorTitle = overview.vendor === 'fortigate' ? 'FortiGate (FortiOS)' : 'SonicWall (SonicOS)';
   const telemetry = overview.telemetry || { interfaces: [], vpns: [], licenses: [] };
   const lines: string[] = [
-    `# Relatório Consolidado de Auditoria SonicWall`,
+    `# FW Audit — Relatório Consolidado ${vendorTitle}`,
     ``,
+    `- **Plataforma:** ${vendorTitle}`,
     `- **Gerado em:** ${new Date(report.generatedAt).toLocaleString('pt-BR')}`,
     ...(overview.activeSite
       ? [
@@ -238,7 +244,7 @@ export function renderReportMarkdown(report: AuditReportData): string {
 
   lines.push(
     '',
-    `## 7. Script de Remediação Segura (SonicOS CLI)`,
+    `## 7. Script de Remediação Segura (${overview.vendor === 'fortigate' ? 'FortiOS CLI' : 'SonicOS CLI'})`,
     '',
     '```text',
     report.cliDisableScript,
@@ -374,33 +380,63 @@ export function renderReportHtml(report: AuditReportData): string {
     );
   }
 
+  const isForti = overview.vendor === 'fortigate';
+  const vendorLabel = isForti ? 'FortiGate (FortiOS)' : 'SonicWall (SonicOS)';
+  const theme = isForti
+    ? {
+        bg: '#fcf4f4',
+        text: '#451212',
+        heading: '#451212',
+        accent: '#9b2c2c',
+        border: '#eacaca',
+        rowBorder: '#f4dfdf',
+        thBg: '#f9eaea',
+        thText: '#5c2323',
+        muted: '#7b4242',
+        preBg: '#261010',
+        preText: '#fcecec',
+      }
+    : {
+        bg: '#f3f7fc',
+        text: '#102a43',
+        heading: '#102a43',
+        accent: '#1d4e89',
+        border: '#cad9ee',
+        rowBorder: '#e1eaf7',
+        thBg: '#e9f0fa',
+        thText: '#1a365d',
+        muted: '#486581',
+        preBg: '#0f1e33',
+        preText: '#e6effa',
+      };
+
   return `<!doctype html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <title>Relatório de Auditoria SonicWall — ${escapeHtml(ap.model)}</title>
+  <title>FW Audit — Relatório ${escapeHtml(vendorLabel)} — ${escapeHtml(ap.model)}</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f4f8f5; color: #162820; margin: 0; padding: 32px; line-height: 1.5; }
-    .container { max-width: 1120px; margin: 0 auto; background: #ffffff; border: 1px solid #d4e4d8; border-radius: 10px; padding: 32px; }
-    h1 { font-size: 22px; margin: 0 0 6px; color: #123325; }
-    h2 { font-size: 15px; margin: 28px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #d4e4d8; color: #1e4d3b; }
-    .meta { font-size: 12px; color: #4b6859; margin-bottom: 24px; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: ${theme.bg}; color: ${theme.text}; margin: 0; padding: 32px; line-height: 1.5; }
+    .container { max-width: 1120px; margin: 0 auto; background: #ffffff; border: 1px solid ${theme.border}; border-radius: 10px; padding: 32px; }
+    h1 { font-size: 22px; margin: 0 0 6px; color: ${theme.heading}; }
+    h2 { font-size: 15px; margin: 28px 0 12px; padding-bottom: 6px; border-bottom: 1px solid ${theme.border}; color: ${theme.accent}; }
+    .meta { font-size: 12px; color: ${theme.muted}; margin-bottom: 24px; }
     .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
-    .kpi { background: #f4f8f5; border: 1px solid #d4e4d8; border-radius: 8px; padding: 14px; }
-    .kpi-label { font-size: 11px; color: #4b6859; }
-    .kpi-value { font-size: 22px; font-weight: 700; font-family: ui-monospace, monospace; margin-top: 4px; color: #123325; }
+    .kpi { background: ${theme.bg}; border: 1px solid ${theme.border}; border-radius: 8px; padding: 14px; }
+    .kpi-label { font-size: 11px; color: ${theme.muted}; }
+    .kpi-value { font-size: 22px; font-weight: 700; font-family: ui-monospace, monospace; margin-top: 4px; color: ${theme.heading}; }
     table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
-    th, td { padding: 8px 10px; border-bottom: 1px solid #e5efe8; text-align: left; vertical-align: top; }
-    th { background: #edf5ef; color: #244838; font-weight: 600; }
+    th, td { padding: 8px 10px; border-bottom: 1px solid ${theme.rowBorder}; text-align: left; vertical-align: top; }
+    th { background: ${theme.thBg}; color: ${theme.thText}; font-weight: 600; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
     .num { font-family: ui-monospace, monospace; text-align: right; }
-    pre { background: #0e221a; color: #e6f2eb; padding: 16px; border-radius: 8px; font-size: 11px; overflow-x: auto; font-family: ui-monospace, monospace; }
+    pre { background: ${theme.preBg}; color: ${theme.preText}; padding: 16px; border-radius: 8px; font-size: 11px; overflow-x: auto; font-family: ui-monospace, monospace; }
     @media print { body { background: #fff; padding: 0; } .container { border: none; padding: 0; } }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>Relatório Consolidado de Auditoria SonicWall</h1>
+    <h1>FW Audit — Relatório Consolidado ${escapeHtml(vendorLabel)}</h1>
     <div class="meta">
       Gerado em ${escapeHtml(new Date(report.generatedAt).toLocaleString('pt-BR'))} ·
       ${overview.activeSite ? `Localidade: <strong>${escapeHtml(overview.activeSite.name)}</strong>${overview.activeSite.location ? ` (${escapeHtml(overview.activeSite.location)})` : ''} · ` : ''}
@@ -468,7 +504,7 @@ export function renderReportHtml(report: AuditReportData): string {
       <tbody>${eventRows || '<tr><td colspan="6">Sem eventos críticos no período.</td></tr>'}</tbody>
     </table>
 
-    <h2>5. Script SonicOS CLI — Desabilitação Segura</h2>
+    <h2>5. Script ${isForti ? 'FortiOS CLI' : 'SonicOS CLI'} — Desabilitação Segura</h2>
     <pre>${escapeHtml(report.cliDisableScript)}</pre>
   </div>
 </body>

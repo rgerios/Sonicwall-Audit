@@ -1,3 +1,5 @@
+export type FirewallVendor = 'sonicwall' | 'fortigate';
+
 export type ActiveSection = 'overview' | 'syslogs' | 'rules' | 'nats' | 'reports' | 'ai' | 'connect';
 
 export type SyslogSeverity =
@@ -221,11 +223,14 @@ export interface FirewallConnectionPublic {
   protocol: 'https' | 'http';
   username: string;
   hasSavedPassword: boolean;
+  authMode?: 'basic' | 'token';
+  vdom?: string;
   ignoreTlsErrors: boolean;
 }
 
 export interface FirewallSiteSummary {
   id: string;
+  vendor: FirewallVendor;
   name: string;
   location: string;
   notes: string;
@@ -247,8 +252,10 @@ export interface AuthStatus {
 }
 
 export interface AuditOverview {
+  vendor: FirewallVendor;
   activeSite: {
     id: string;
+    vendor: FirewallVendor;
     name: string;
     location: string;
     notes: string;

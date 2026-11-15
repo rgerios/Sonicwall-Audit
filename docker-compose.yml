@@ -1,27 +1,27 @@
 services:
   db:
     image: postgres:16-alpine
-    container_name: sonicaudit-db
+    container_name: fwaudit-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-sonicaudit}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sonicaudit_change_me}
-      POSTGRES_DB: ${POSTGRES_DB:-sonicaudit}
+      POSTGRES_USER: ${POSTGRES_USER:-fwaudit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fwaudit_change_me}
+      POSTGRES_DB: ${POSTGRES_DB:-fwaudit}
     volumes:
-      - sonicaudit_pgdata:/var/lib/postgresql/data
+      - fwaudit_pgdata:/var/lib/postgresql/data
     networks:
-      - sonicaudit_net
+      - fwaudit_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sonicaudit} -d ${POSTGRES_DB:-sonicaudit}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fwaudit} -d ${POSTGRES_DB:-fwaudit}"]
       interval: 10s
       timeout: 5s
       retries: 10
 
-  backend:
+  backend-sonicwall:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    container_name: sonicaudit-backend
+    container_name: fwaudit-backend-sonicwall
     restart: unless-stopped
     depends_on:
       db:
@@ -29,38 +29,68 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
+      FW_VENDOR: sonicwall
       SERVE_STATIC: "false"
-      DATABASE_URL: postgres://${POSTGRES_USER:-sonicaudit}:${POSTGRES_PASSWORD:-sonicaudit_change_me}@db:5432/${POSTGRES_DB:-sonicaudit}
+      DATABASE_URL: postgres://${POSTGRES_USER:-fwaudit}:${POSTGRES_PASSWORD:-fwaudit_change_me}@db:5432/${POSTGRES_DB:-fwaudit}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      SONICAUDIT_ADMIN_USER: ${SONICAUDIT_ADMIN_USER:-}
-      SONICAUDIT_ADMIN_PASS: ${SONICAUDIT_ADMIN_PASS:-}
+      SONICAUDIT_ADMIN_USER: ${FWAUDIT_ADMIN_USER:-}
+      SONICAUDIT_ADMIN_PASS: ${FWAUDIT_ADMIN_PASS:-}
     ports:
-      - "${SYSLOG_UDP_PORT:-5514}:5514/udp"
+      - "${SONICWALL_UDP_PORT:-5514}:5514/udp"
     volumes:
-      - sonicaudit_appdata:/app/data
+      - fwaudit_sonicwall_data:/app/data
     networks:
-      - sonicaudit_net
+      - fwaudit_net
+
+  backend-fortigate:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: fwaudit-backend-fortigate
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      FW_VENDOR: fortigate
+      SERVE_STATIC: "false"
+      DATABASE_URL: postgres://${POSTGRES_USER:-fwaudit}:${POSTGRES_PASSWORD:-fwaudit_change_me}@db:5432/${POSTGRES_DB:-fwaudit}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      SONICAUDIT_ADMIN_USER: ${FWAUDIT_ADMIN_USER:-}
+      SONICAUDIT_ADMIN_PASS: ${FWAUDIT_ADMIN_PASS:-}
+    ports:
+      - "${FORTIGATE_UDP_PORT:-5515}:5515/udp"
+    volumes:
+      - fwaudit_fortigate_data:/app/data
+    networks:
+      - fwaudit_net
 
   frontend:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    container_name: sonicaudit-frontend
+    container_name: fwaudit-frontend
     restart: unless-stopped
     depends_on:
-      backend:
+      backend-sonicwall:
+        condition: service_healthy
+      backend-fortigate:
         condition: service_healthy
     ports:
       - "${FRONTEND_PORT:-8080}:80"
     networks:
-      - sonicaudit_net
+      - fwaudit_net
 
 volumes:
-  sonicaudit_pgdata:
+  fwaudit_pgdata:
     driver: local
-  sonicaudit_appdata:
+  fwaudit_sonicwall_data:
+    driver: local
+  fwaudit_fortigate_data:
     driver: local
 
 networks:
-  sonicaudit_net:
+  fwaudit_net:
     driver: bridge
