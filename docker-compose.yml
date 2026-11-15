@@ -1,0 +1,66 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: sonicaudit-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sonicaudit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sonicaudit_change_me}
+      POSTGRES_DB: ${POSTGRES_DB:-sonicaudit}
+    volumes:
+      - sonicaudit_pgdata:/var/lib/postgresql/data
+    networks:
+      - sonicaudit_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sonicaudit} -d ${POSTGRES_DB:-sonicaudit}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: sonicaudit-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      SERVE_STATIC: "false"
+      DATABASE_URL: postgres://${POSTGRES_USER:-sonicaudit}:${POSTGRES_PASSWORD:-sonicaudit_change_me}@db:5432/${POSTGRES_DB:-sonicaudit}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      SONICAUDIT_ADMIN_USER: ${SONICAUDIT_ADMIN_USER:-}
+      SONICAUDIT_ADMIN_PASS: ${SONICAUDIT_ADMIN_PASS:-}
+    ports:
+      - "${SYSLOG_UDP_PORT:-5514}:5514/udp"
+    volumes:
+      - sonicaudit_appdata:/app/data
+    networks:
+      - sonicaudit_net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: sonicaudit-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    networks:
+      - sonicaudit_net
+
+volumes:
+  sonicaudit_pgdata:
+    driver: local
+  sonicaudit_appdata:
+    driver: local
+
+networks:
+  sonicaudit_net:
+    driver: bridge

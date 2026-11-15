@@ -1,0 +1,600 @@
+import https from 'node:https';
+import http from 'node:http';
+import { parseSonicOsJson } from './parsers.ts';
+import type {
+  FirewallRule,
+  InterfaceTelemetry,
+  NatPolicy,
+  SecurityServiceLicense,
+  TelemetrySnapshot,
+  VpnTunnelStatus,
+} from './types.ts';
+
+export interface SonicOsConnectParams {
+  host: string;
+  port: number;
+  protocol: 'https' | 'http';
+  username: string;
+  password: string;
+  ignoreTlsErrors: boolean;
+}
+
+export interface SonicOsAuditResult {
+  rules: FirewallRule[];
+  nats: NatPolicy[];
+  model: string;
+  firmware: string;
+  serialNumber: string;
+  romVersion?: string;
+  safemodeVersion?: string;
+  uptimeFormatted?: string;
+  uptimeSeconds?: number;
+  cpuPercent?: number | null;
+  memoryPercent?: number | null;
+  activeConnections?: number | null;
+  maxConnections?: number | null;
+  haRole?: string;
+  telemetry: TelemetrySnapshot;
+}
+
+function asRecord(val: unknown): Record<string, unknown> {
+  return val && typeof val === 'object' && !Array.isArray(val)
+    ? (val as Record<string, unknown>)
+    : {};
+}
+
+function pickNumber(obj: Record<string, unknown>, keys: string[]): number | null {
+  for (const k of keys) {
+    const raw = obj[k];
+    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+    if (typeof raw === 'string') {
+      const cleaned = raw.replace(/[^0-9.\-]/g, '');
+      if (cleaned) {
+        const num = Number(cleaned);
+        if (Number.isFinite(num)) return num;
+      }
+    }
+  }
+  return null;
+}
+
+function pickString(obj: Record<string, unknown>, keys: string[]): string {
+  for (const k of keys) {
+    const raw = obj[k];
+    if (typeof raw === 'string' && raw.trim()) return raw.trim();
+  }
+  return '';
+}
+
+function formatUptimeSeconds(totalSeconds: number): string {
+  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return '-';
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const mins = Math.floor((totalSeconds % 3600) / 60);
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  parts.push(`${hours}h`);
+  parts.push(`${mins}m`);
+  return parts.join(' ');
+}
+
+function extractArray(data: unknown, candidateKeys: string[]): Array<Record<string, unknown>> {
+  if (Array.isArray(data)) {
+    return data.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'));
+  }
+  const rec = asRecord(data);
+  for (const key of candidateKeys) {
+    const val = rec[key];
+    if (Array.isArray(val)) {
+      return val.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'));
+    }
+  }
+  return [];
+}
+
+function normalizeRateMbps(obj: Record<string, unknown>, direction: 'rx' | 'tx'): number {
+  const mbps = pickNumber(obj, [
+    `${direction}_mbps`,
+    `${direction}Mbps`,
+    `${direction}_rate_mbps`,
+    `ingress_mbps`,
+  ]);
+  if (mbps !== null && direction === 'rx') return Math.max(0, Number(mbps.toFixed(2)));
+  if (mbps !== null && direction === 'tx') return Math.max(0, Number(mbps.toFixed(2)));
+
+  const kbps = pickNumber(obj, [
+    `${direction}_kbps`,
+    `${direction}Kbps`,
+    `${direction}_rate_kbps`,
+    `${direction}_kilobits_per_second`,
+  ]);
+  if (kbps !== null) return Math.max(0, Number((kbps / 1000).toFixed(2)));
+
+  const bps = pickNumber(obj, [
+    `${direction}_bps`,
+    `${direction}Bps`,
+    `${direction}_bits_per_second`,
+    `${direction}_throughput`,
+    `${direction}_bytes_per_second`,
+  ]);
+  if (bps !== null) {
+    // bytes_per_second vs bits_per_second heuristic: if key contains byte, multiply by 8
+    return Math.max(0, Number((bps / 1_000_000).toFixed(2)));
+  }
+
+  return 0;
+}
+
+function parseSpeedMbps(rawSpeed: unknown): number {
+  if (typeof rawSpeed === 'number' && Number.isFinite(rawSpeed)) {
+    return rawSpeed > 0 ? rawSpeed : 1000;
+  }
+  if (typeof rawSpeed === 'string') {
+    const lower = rawSpeed.toLowerCase();
+    const num = Number(lower.replace(/[^0-9.]/g, ''));
+    if (Number.isFinite(num) && num > 0) {
+      if (lower.includes('gbps') || lower.includes('g ')) return num * 1000;
+      return num;
+    }
+  }
+  return 1000;
+}
+
+async function requestSonicOs(
+  baseUrl: string,
+  path: string,
+  options: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    ignoreTlsErrors: boolean;
+  }
+): Promise<{ status: number; data: unknown; headers: http.IncomingHttpHeaders }> {
+  const url = new URL(path, baseUrl);
+  const isHttps = url.protocol === 'https:';
+  const transport = isHttps ? https : http;
+  const agent = isHttps
+    ? new https.Agent({ rejectUnauthorized: !options.ignoreTlsErrors })
+    : undefined;
+
+  return new Promise((resolve, reject) => {
+    const req = transport.request(
+      url,
+      {
+        method: options.method || 'GET',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          ...(options.headers || {}),
+        },
+        agent,
+        timeout: 10000,
+      },
+      (res) => {
+        let raw = '';
+        res.on('data', (chunk) => {
+          raw += chunk.toString();
+        });
+        res.on('end', () => {
+          let parsed: unknown = raw;
+          try {
+            parsed = raw ? JSON.parse(raw) : {};
+          } catch {
+            // Keep raw text if response wasn't JSON
+          }
+          resolve({
+            status: res.statusCode || 500,
+            data: parsed,
+            headers: res.headers,
+          });
+        });
+      }
+    );
+
+    req.on('timeout', () => {
+      req.destroy(new Error(`Timeout ao conectar em ${url.hostname}:${url.port} (10s)`));
+    });
+    req.on('error', (err) => {
+      reject(err);
+    });
+
+    if (options.body) {
+      req.write(options.body);
+    }
+    req.end();
+  });
+}
+
+export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<SonicOsAuditResult> {
+  const cleanHost = params.host.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  const baseUrl = `${params.protocol}://${cleanHost}:${params.port}`;
+  const basicAuth = Buffer.from(`${params.username}:${params.password}`).toString('base64');
+
+  const authHeaders: Record<string, string> = {
+    Authorization: `Basic ${basicAuth}`,
+  };
+
+  // Authenticate session in SonicOS REST API (Gen 6.5 / Gen 7)
+  const loginRes = await requestSonicOs(baseUrl, '/api/sonicos/auth', {
+    method: 'POST',
+    headers: authHeaders,
+    body: JSON.stringify({ override: false }),
+    ignoreTlsErrors: params.ignoreTlsErrors,
+  });
+
+  if (loginRes.status >= 400) {
+    throw new Error(
+      `Falha na autenticação SonicOS (${loginRes.status}). Verifique usuário, senha e se a API REST (SonicOS API) está habilitada no appliance.`
+    );
+  }
+
+  const cookies = loginRes.headers['set-cookie'];
+  if (cookies && cookies.length > 0) {
+    authHeaders.Cookie = cookies.map((c) => c.split(';')[0]).join('; ');
+  }
+
+  const safeGet = (endpoint: string) =>
+    requestSonicOs(baseUrl, endpoint, {
+      headers: authHeaders,
+      ignoreTlsErrors: params.ignoreTlsErrors,
+    }).catch(() => ({ status: 404, data: {}, headers: {} }));
+
+  try {
+    const [
+      rulesRes,
+      natsRes,
+      ruleStatsRes,
+      natStatsRes,
+      versionRes,
+      systemReportRes,
+      systemStatusRes,
+      cpuRes,
+      memRes,
+      connRes,
+      ifaceCfgRes,
+      ifaceStatsRes,
+      vpnRes,
+      sslVpnRes,
+      licensesRes,
+    ] = await Promise.all([
+      requestSonicOs(baseUrl, '/api/sonicos/access-rules/ipv4', {
+        headers: authHeaders,
+        ignoreTlsErrors: params.ignoreTlsErrors,
+      }),
+      requestSonicOs(baseUrl, '/api/sonicos/nat-policies/ipv4', {
+        headers: authHeaders,
+        ignoreTlsErrors: params.ignoreTlsErrors,
+      }),
+      safeGet('/api/sonicos/reporting/access-rules'),
+      safeGet('/api/sonicos/reporting/nat-policies'),
+      safeGet('/api/sonicos/version'),
+      safeGet('/api/sonicos/reporting/system'),
+      safeGet('/api/sonicos/system/status'),
+      safeGet('/api/sonicos/reporting/core-utilization'),
+      safeGet('/api/sonicos/reporting/memory-utilization'),
+      safeGet('/api/sonicos/reporting/connections'),
+      safeGet('/api/sonicos/interfaces/ipv4'),
+      safeGet('/api/sonicos/reporting/interfaces'),
+      safeGet('/api/sonicos/reporting/vpn/policies'),
+      safeGet('/api/sonicos/reporting/ssl-vpn/sessions'),
+      safeGet('/api/sonicos/reporting/licenses'),
+    ]);
+
+    const parsed = parseSonicOsJson(
+      {
+        access_rules: asRecord(rulesRes.data).access_rules || [],
+        nat_policies: asRecord(natsRes.data).nat_policies || [],
+      },
+      'api'
+    );
+
+    // Merge hit counters from /reporting/* endpoints when available
+    const ruleStatsMap = new Map<string, number>();
+    const ruleReports = extractArray(ruleStatsRes.data, ['access_rules', 'policies']);
+    for (const stat of ruleReports) {
+      const uuid = String(stat.uuid || stat.id || '');
+      const hits = Number(stat.hits ?? stat.hit_count ?? stat.rx_packets ?? 0);
+      if (uuid && Number.isFinite(hits)) {
+        ruleStatsMap.set(uuid, hits);
+      }
+    }
+
+    const natStatsMap = new Map<string, number>();
+    const natReports = extractArray(natStatsRes.data, ['nat_policies', 'policies']);
+    for (const stat of natReports) {
+      const uuid = String(stat.uuid || stat.id || '');
+      const hits = Number(stat.hits ?? stat.hit_count ?? stat.rx_packets ?? 0);
+      if (uuid && Number.isFinite(hits)) {
+        natStatsMap.set(uuid, hits);
+      }
+    }
+
+    const rules = parsed.rules.map((r) => ({
+      ...r,
+      applianceHits:
+        (r.uuid ? ruleStatsMap.get(r.uuid) : undefined) ?? ruleStatsMap.get(r.id) ?? r.applianceHits,
+    }));
+
+    const nats = parsed.nats.map((n) => ({
+      ...n,
+      applianceHits:
+        (n.uuid ? natStatsMap.get(n.uuid) : undefined) ?? natStatsMap.get(n.id) ?? n.applianceHits,
+    }));
+
+    // Version & System Status / Uptime
+    const ver = asRecord(versionRes.data);
+    const sysRaw = asRecord(systemReportRes.data);
+    const sysAlt = asRecord(systemStatusRes.data);
+    const sysObj = Object.keys(asRecord(sysRaw.system)).length > 0
+      ? asRecord(sysRaw.system)
+      : Object.keys(sysRaw).length > 0
+        ? sysRaw
+        : asRecord(sysAlt.system ?? sysAlt);
+
+    const uptimeSecondsRaw = pickNumber(sysObj, ['uptime_seconds', 'up_time_seconds', 'uptime_sec']);
+    const uptimeStrRaw = pickString(sysObj, ['up_time', 'uptime', 'system_uptime', 'uptime_string']) ||
+      pickString(ver, ['up_time', 'uptime']);
+    const uptimeFormatted = uptimeStrRaw || (uptimeSecondsRaw !== null ? formatUptimeSeconds(uptimeSecondsRaw) : undefined);
+
+    const model =
+      pickString(ver, ['model', 'appliance_model', 'product_name']) ||
+      pickString(sysObj, ['model', 'appliance_model']) ||
+      'SonicWall Appliance';
+    const firmware =
+      pickString(ver, ['firmware_version', 'firmware', 'sonicos_version']) ||
+      pickString(sysObj, ['firmware_version', 'firmware']) ||
+      'SonicOS API';
+    const serialNumber =
+      pickString(ver, ['serial_number', 'serial', 'sn']) ||
+      pickString(sysObj, ['serial_number', 'serial']) ||
+      '-';
+    const romVersion = pickString(ver, ['rom_version', 'rom']) || undefined;
+    const safemodeVersion = pickString(ver, ['safemode_version', 'safemode']) || undefined;
+    const haRole = pickString(sysObj, ['ha_role', 'ha_status', 'high_availability_role']) || undefined;
+
+    // CPU utilization
+    const cpuObj = asRecord(cpuRes.data);
+    let cpuPercent = pickNumber(cpuObj, [
+      'total',
+      'cpu_utilization',
+      'utilization',
+      'average',
+      'core_utilization',
+    ]);
+    if (cpuPercent === null) {
+      const cores = extractArray(cpuRes.data, ['cores', 'core_utilization', 'cpu']);
+      if (cores.length > 0) {
+        const vals = cores
+          .map((c) => pickNumber(c, ['utilization', 'percent', 'usage', 'load', 'value']))
+          .filter((v): v is number => v !== null);
+        if (vals.length > 0) {
+          cpuPercent = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+        }
+      }
+    }
+    if (cpuPercent !== null) {
+      cpuPercent = Math.min(100, Math.max(0, Math.round(cpuPercent)));
+    }
+
+    // Memory utilization
+    const memObj = asRecord(memRes.data);
+    const memInner = Object.keys(asRecord(memObj.memory)).length > 0 ? asRecord(memObj.memory) : memObj;
+    let memoryPercent = pickNumber(memInner, [
+      'used_percent',
+      'memory_utilization',
+      'ram_utilization',
+      'utilization',
+      'percent',
+    ]);
+    if (memoryPercent === null) {
+      const used = pickNumber(memInner, ['used', 'used_bytes', 'used_mb']);
+      const total = pickNumber(memInner, ['total', 'total_bytes', 'total_mb']);
+      if (used !== null && total !== null && total > 0) {
+        memoryPercent = Math.round((used / total) * 100);
+      }
+    }
+    if (memoryPercent !== null) {
+      memoryPercent = Math.min(100, Math.max(0, Math.round(memoryPercent)));
+    }
+
+    // Active / Max connections
+    const connObj = asRecord(connRes.data);
+    const connInner = Object.keys(asRecord(connObj.connections)).length > 0 ? asRecord(connObj.connections) : connObj;
+    const activeConnections = pickNumber(connInner, [
+      'active_connections',
+      'current_connections',
+      'active',
+      'current',
+      'count',
+    ]);
+    const maxConnections = pickNumber(connInner, [
+      'max_connections',
+      'maximum_connections',
+      'max',
+      'limit',
+    ]);
+
+    // Interfaces & link consumption
+    const ifaceConfigs = extractArray(ifaceCfgRes.data, ['interfaces', 'interface', 'ipv4']);
+    const ifaceStats = extractArray(ifaceStatsRes.data, ['interfaces', 'interface', 'interface_statistics']);
+
+    const ifaceConfigMap = new Map<string, Record<string, unknown>>();
+    for (const cfg of ifaceConfigs) {
+      const ipv4 = asRecord(cfg.ipv4);
+      const name =
+        pickString(cfg, ['name', 'interface', 'id']) ||
+        pickString(ipv4, ['name', 'interface']);
+      if (name) {
+        ifaceConfigMap.set(name.toUpperCase(), Object.keys(ipv4).length > 0 ? { ...cfg, ...ipv4 } : cfg);
+      }
+    }
+
+    const ifaceStatMap = new Map<string, Record<string, unknown>>();
+    for (const st of ifaceStats) {
+      const name = pickString(st, ['name', 'interface', 'id']);
+      if (name) {
+        ifaceStatMap.set(name.toUpperCase(), st);
+      }
+    }
+
+    const allIfaceNames = new Set<string>([...ifaceConfigMap.keys(), ...ifaceStatMap.keys()]);
+    const interfaces: InterfaceTelemetry[] = [];
+
+    for (const key of allIfaceNames) {
+      const cfg = ifaceConfigMap.get(key) || {};
+      const st = ifaceStatMap.get(key) || {};
+      const merged = { ...cfg, ...st };
+
+      const name = pickString(merged, ['name', 'interface', 'id']) || key;
+      const ipv4Static = asRecord(asRecord(asRecord(merged.ip_assignment).mode).static);
+      const ip =
+        pickString(merged, ['ip', 'ip_address', 'ipv4_address', 'address']) ||
+        pickString(ipv4Static, ['ip']) ||
+        '-';
+      const zone =
+        pickString(merged, ['zone', 'security_zone']) ||
+        pickString(asRecord(merged.ip_assignment), ['zone']) ||
+        '-';
+
+      const statusText = (
+        pickString(merged, ['link_status', 'status', 'state', 'link']) || 'up'
+      ).toLowerCase();
+      const linkStatus: 'up' | 'down' =
+        statusText.includes('down') || statusText === 'false' || statusText === 'disabled'
+          ? 'down'
+          : 'up';
+
+      const linkSpeedMbps = parseSpeedMbps(
+        merged.link_speed ?? merged.speed ?? merged.configured_speed ?? 1000
+      );
+      const rxMbps = normalizeRateMbps(merged, 'rx');
+      const txMbps = normalizeRateMbps(merged, 'tx');
+      const rxBytes = pickNumber(merged, ['rx_bytes', 'in_bytes', 'rx_octets']) ?? 0;
+      const txBytes = pickNumber(merged, ['tx_bytes', 'out_bytes', 'tx_octets']) ?? 0;
+      const rxErrors = pickNumber(merged, ['rx_errors', 'in_errors']) ?? 0;
+      const txErrors = pickNumber(merged, ['tx_errors', 'out_errors']) ?? 0;
+
+      const explicitUtil = pickNumber(merged, ['utilization', 'utilization_percent', 'bandwidth_usage']);
+      const peakMbps = Math.max(rxMbps, txMbps);
+      const computedUtil =
+        linkSpeedMbps > 0 ? Math.min(100, Number(((peakMbps / linkSpeedMbps) * 100).toFixed(1))) : 0;
+      const utilizationPercent = explicitUtil !== null ? Math.min(100, Math.max(0, explicitUtil)) : computedUtil;
+
+      const upperZone = zone.toUpperCase();
+      const roleRaw = pickString(merged, ['wan_role', 'failover_role', 'role']).toLowerCase();
+      let role: InterfaceTelemetry['role'] = 'internal';
+      if (upperZone === 'WAN' || name.toUpperCase() === 'X1' || name.toUpperCase() === 'X2') {
+        role = roleRaw.includes('failover') || roleRaw.includes('backup') || name.toUpperCase() === 'X2'
+          ? 'wan-failover'
+          : 'wan-primary';
+      }
+
+      interfaces.push({
+        name,
+        zone,
+        ip,
+        linkStatus,
+        linkSpeedMbps,
+        rxMbps,
+        txMbps,
+        rxBytes,
+        txBytes,
+        rxErrors,
+        txErrors,
+        utilizationPercent,
+        role,
+      });
+    }
+
+    interfaces.sort((a, b) => a.name.localeCompare(b.name));
+
+    // VPN Tunnels (IPSec + SSL VPN)
+    const vpns: VpnTunnelStatus[] = [];
+    const ipsecEntries = extractArray(vpnRes.data, ['vpn_policies', 'policies', 'tunnels', 'sa']);
+    for (const vpn of ipsecEntries) {
+      const name = pickString(vpn, ['name', 'policy_name', 'tunnel_name']) || 'VPN IPSec';
+      const peer = pickString(vpn, ['peer_gateway', 'remote_gateway', 'gateway', 'peer']) || '-';
+      const stateText = pickString(vpn, ['status', 'state', 'tunnel_status']).toLowerCase();
+      const up =
+        stateText.includes('up') ||
+        stateText.includes('active') ||
+        stateText.includes('established') ||
+        vpn.enabled === true;
+      vpns.push({
+        name,
+        type: 'ipsec',
+        peer,
+        status: up ? 'up' : 'down',
+        rxBytes: pickNumber(vpn, ['rx_bytes', 'in_bytes', 'decrypted_bytes']) ?? 0,
+        txBytes: pickNumber(vpn, ['tx_bytes', 'out_bytes', 'encrypted_bytes']) ?? 0,
+      });
+    }
+
+    const sslSessions = extractArray(sslVpnRes.data, ['sessions', 'ssl_vpn_sessions', 'users']);
+    if (sslSessions.length > 0) {
+      const totalRx = sslSessions.reduce(
+        (acc, s) => acc + (pickNumber(s, ['rx_bytes', 'in_bytes']) ?? 0),
+        0
+      );
+      const totalTx = sslSessions.reduce(
+        (acc, s) => acc + (pickNumber(s, ['tx_bytes', 'out_bytes']) ?? 0),
+        0
+      );
+      vpns.push({
+        name: 'SSL VPN (Usuários Remotos)',
+        type: 'sslvpn',
+        peer: `${sslSessions.length} sessão(ões) ativa(s)`,
+        status: 'up',
+        rxBytes: totalRx,
+        txBytes: totalTx,
+        activeUsers: sslSessions.length,
+      });
+    }
+
+    // Security Service Licenses
+    const licenseRows = extractArray(licensesRes.data, ['licenses', 'services', 'security_services']);
+    const licenses: SecurityServiceLicense[] = licenseRows.map((lic) => {
+      const service = pickString(lic, ['service', 'name', 'feature']) || 'Serviço de Segurança';
+      const rawStatus = pickString(lic, ['status', 'state']).toLowerCase();
+      const expiresAt = pickString(lic, ['expiration', 'expires_at', 'expiry_date']) || null;
+      let status: SecurityServiceLicense['status'] = 'active';
+      if (rawStatus.includes('expir') && !rawStatus.includes('expiring')) {
+        status = 'expired';
+      } else if (rawStatus.includes('expiring') || rawStatus.includes('warn')) {
+        status = 'expiring';
+      } else if (rawStatus.includes('unlic') || rawStatus.includes('inactive') || rawStatus.includes('not')) {
+        status = 'unlicensed';
+      }
+      return { service, status, expiresAt };
+    });
+
+    return {
+      rules,
+      nats,
+      model,
+      firmware,
+      serialNumber,
+      romVersion,
+      safemodeVersion,
+      uptimeFormatted,
+      uptimeSeconds: uptimeSecondsRaw ?? undefined,
+      cpuPercent,
+      memoryPercent,
+      activeConnections,
+      maxConnections,
+      haRole,
+      telemetry: {
+        interfaces,
+        vpns,
+        licenses,
+      },
+    };
+  } finally {
+    // Gracefully close SonicOS management session so admin slots are not locked
+    await requestSonicOs(baseUrl, '/api/sonicos/auth', {
+      method: 'DELETE',
+      headers: authHeaders,
+      ignoreTlsErrors: params.ignoreTlsErrors,
+    }).catch(() => undefined);
+  }
+}

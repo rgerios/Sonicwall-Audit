@@ -1,0 +1,6 @@
+{
+  "name": "SonicAudit — Análise de Syslog, NAT e Firewall SonicWall",
+  "description": "Aplicação web para ambiente Linux dedicada à ingestão e análise de syslogs SonicWall, identificação de políticas NAT sem uso e auditoria de regras de firewall inativas ou sombreadas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
