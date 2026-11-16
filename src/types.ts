@@ -189,6 +189,8 @@ export type AlertSeverity = 'critical' | 'warning';
 export type AlertCategory =
   | 'bandwidth'
   | 'link-down'
+  | 'traffic-volume'
+  | 'anomaly'
   | 'ips'
   | 'malware'
   | 'critical-log'
@@ -197,6 +199,12 @@ export type AlertCategory =
 export interface AlertSettings {
   bandwidthUtilizationLimitPercent: number;
   bandwidthMbpsLimit: number;
+  hourlyLogVolumeLimit: number;
+  syslogTrafficMbLimit: number;
+  blockedTrafficRatioLimitPercent: number;
+  anomalyDetectionEnabled: boolean;
+  anomalySpikeMultiplier: number;
+  portScanUniquePortsThreshold: number;
   alertOnIps: boolean;
   alertOnCriticalLogs: boolean;
   suspiciousBlockThreshold: number;

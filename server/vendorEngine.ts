@@ -168,7 +168,8 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
     const alerts = evaluateOverviewAlerts(
       site.telemetry || EMPTY_TELEMETRY,
       site.syslogs,
-      normalizeAlertSettings(site.alertSettings)
+      normalizeAlertSettings(site.alertSettings),
+      vendor
     );
     return {
       id: site.id,
@@ -662,7 +663,8 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
       alerts: evaluateOverviewAlerts(
         site.telemetry || EMPTY_TELEMETRY,
         site.syslogs,
-        normalizedAlertSettings
+        normalizedAlertSettings,
+        vendor
       ),
       udpStatus: udpReceiver.getStatus(),
       retention: {

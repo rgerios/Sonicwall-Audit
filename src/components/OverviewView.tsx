@@ -50,6 +50,7 @@ interface OverviewViewProps {
   onOverviewUpdated: (next: AuditOverview) => void;
   onInvestigateSyslog: (query: string) => void;
   onAnalyzeWithAi: (prompt: string) => void;
+  openAlertConfigSignal?: number;
 }
 
 type WidgetId =
@@ -155,6 +156,7 @@ export function OverviewView({
   onOverviewUpdated,
   onInvestigateSyslog,
   onAnalyzeWithAi,
+  openAlertConfigSignal = 0,
 }: OverviewViewProps) {
   const theme = VENDOR_THEMES[vendor];
   const [layout, setLayout] = useState<WidgetPreference[]>(() => loadSavedLayout(vendor));
@@ -1082,6 +1084,7 @@ export function OverviewView({
         onOverviewUpdated={onOverviewUpdated}
         onInvestigateSyslog={onInvestigateSyslog}
         onAnalyzeWithAi={onAnalyzeWithAi}
+        openConfigSignal={openAlertConfigSignal}
       />
 
       <div className="flex flex-wrap items-center justify-between gap-3">

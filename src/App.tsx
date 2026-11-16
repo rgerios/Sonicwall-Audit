@@ -3,6 +3,7 @@ import { AccountPasswordModal } from './components/AccountPasswordModal.tsx';
 import { AiAnalystView } from './components/AiAnalystView.tsx';
 import { ConnectLinuxView } from './components/ConnectLinuxView.tsx';
 import { LoginView } from './components/LoginView.tsx';
+import { NotificationToastStack } from './components/NotificationToastStack.tsx';
 import { OverviewView } from './components/OverviewView.tsx';
 import { ReportsView } from './components/ReportsView.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
@@ -37,6 +38,7 @@ export default function App() {
   const [refreshToken, setRefreshToken] = useState(0);
   const [pendingAiPrompt, setPendingAiPrompt] = useState<string | null>(null);
   const [pendingSyslogQuery, setPendingSyslogQuery] = useState<string | null>(null);
+  const [openAlertConfigSignal, setOpenAlertConfigSignal] = useState(0);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-vendor', activeVendor);
@@ -155,6 +157,11 @@ export default function App() {
     setActiveSection('syslogs');
   };
 
+  const handleOpenAlertConfig = () => {
+    setActiveSection('overview');
+    setOpenAlertConfigSignal((n) => n + 1);
+  };
+
   if (authChecking) {
     return (
       <div className="min-h-screen bg-[var(--fw-bg)] flex items-center justify-center p-6">
@@ -191,8 +198,11 @@ export default function App() {
           vendor={activeVendor}
           activeSection={activeSection}
           activeSiteName={overview?.activeSite?.name}
+          overview={overview}
           onLoadSample={() => void handleLoadSample()}
           onGoToConnect={() => setActiveSection('connect')}
+          onOpenAlertConfig={handleOpenAlertConfig}
+          onInvestigateSyslog={handleInvestigateSyslog}
           loadingSample={loadingSample}
         />
 
@@ -207,6 +217,7 @@ export default function App() {
               onOverviewUpdated={setOverview}
               onInvestigateSyslog={handleInvestigateSyslog}
               onAnalyzeWithAi={handleAnalyzeEventWithAi}
+              openAlertConfigSignal={openAlertConfigSignal}
             />
           )}
 
@@ -272,6 +283,14 @@ export default function App() {
           onClose={() => setShowPasswordModal(false)}
         />
       )}
+
+      <NotificationToastStack
+        vendor={activeVendor}
+        overview={overview}
+        onViewAlerts={handleOpenAlertConfig}
+        onInvestigateSyslog={handleInvestigateSyslog}
+        onAnalyzeWithAi={handleAnalyzeEventWithAi}
+      />
     </div>
   );
 }

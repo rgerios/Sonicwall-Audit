@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertOctagon,
   AlertTriangle,
+  BarChart3,
   Bell,
   Bot,
   Bug,
@@ -14,10 +15,20 @@ import {
   Search,
   Settings2,
   ShieldAlert,
+  TrendingUp,
   WifiOff,
   X,
 } from 'lucide-react';
 import type { AlertSettings, AuditOverview, FirewallVendor, OverviewAlert } from '../types.ts';
+import {
+  DISMISSED_ALERTS_EVENT,
+  REEVALUATE_TOASTS_EVENT,
+  dismissAlertKey,
+  getAlertCategoryLabel,
+  getAlertFingerprint,
+  loadDismissedAlertKeys,
+  restoreAllDismissedAlerts,
+} from '../utils/alertHelpers.ts';
 import { vendorApiUrl } from '../utils/vendorApi.ts';
 
 interface OverviewAlertCenterProps {
@@ -26,45 +37,10 @@ interface OverviewAlertCenterProps {
   onOverviewUpdated: (next: AuditOverview) => void;
   onInvestigateSyslog: (query: string) => void;
   onAnalyzeWithAi: (prompt: string) => void;
+  openConfigSignal?: number;
 }
 
-type CategoryFilter = 'all' | 'bandwidth' | 'ips-malware' | 'logs';
-
-function getDismissedStorageKey(vendor: FirewallVendor): string {
-  return `fwaudit_dismissed_alerts_v1_${vendor}`;
-}
-
-function loadDismissedKeys(vendor: FirewallVendor): string[] {
-  try {
-    const raw = localStorage.getItem(getDismissedStorageKey(vendor));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-
-function getAlertFingerprint(alert: OverviewAlert): string {
-  return `${alert.id}|${alert.metricValue}`;
-}
-
-function getCategoryLabel(cat: OverviewAlert['category']): string {
-  switch (cat) {
-    case 'bandwidth':
-      return 'Uso de Banda';
-    case 'link-down':
-      return 'Link Offline';
-    case 'ips':
-      return 'IPS / Origem Maliciosa';
-    case 'malware':
-      return 'Malware / Antivírus';
-    case 'critical-log':
-      return 'Falha Crítica';
-    case 'suspicious-traffic':
-      return 'Log Suspeito';
-  }
-}
+type CategoryFilter = 'all' | 'bandwidth' | 'traffic-anomaly' | 'ips-malware' | 'logs';
 
 function renderCategoryIcon(alert: OverviewAlert) {
   const cls =
@@ -76,6 +52,10 @@ function renderCategoryIcon(alert: OverviewAlert) {
       return <Gauge className={cls} aria-hidden="true" />;
     case 'link-down':
       return <WifiOff className={cls} aria-hidden="true" />;
+    case 'traffic-volume':
+      return <BarChart3 className={cls} aria-hidden="true" />;
+    case 'anomaly':
+      return <TrendingUp className={cls} aria-hidden="true" />;
     case 'ips':
       return <ShieldAlert className={cls} aria-hidden="true" />;
     case 'malware':
@@ -93,8 +73,10 @@ export function OverviewAlertCenter({
   onOverviewUpdated,
   onInvestigateSyslog,
   onAnalyzeWithAi,
+  openConfigSignal = 0,
 }: OverviewAlertCenterProps) {
-  const [dismissedKeys, setDismissedKeys] = useState<string[]>(() => loadDismissedKeys(vendor));
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const [dismissedKeys, setDismissedKeys] = useState<string[]>(() => loadDismissedAlertKeys(vendor));
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all');
   const [showAllAlerts, setShowAllAlerts] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
@@ -104,7 +86,7 @@ export function OverviewAlertCenter({
   const [configFeedback, setConfigFeedback] = useState<string | null>(null);
 
   useEffect(() => {
-    setDismissedKeys(loadDismissedKeys(vendor));
+    setDismissedKeys(loadDismissedAlertKeys(vendor));
     setCategoryFilter('all');
     setShowAllAlerts(false);
     setShowConfig(false);
@@ -112,16 +94,28 @@ export function OverviewAlertCenter({
   }, [vendor]);
 
   useEffect(() => {
-    setDraftSettings(overview.alertSettings);
-  }, [overview.alertSettings]);
+    const onSync = (event: Event) => {
+      const detail = (event as CustomEvent<{ vendor: FirewallVendor; keys: string[] }>).detail;
+      if (detail?.vendor === vendor) {
+        setDismissedKeys(detail.keys);
+      }
+    };
+    window.addEventListener(DISMISSED_ALERTS_EVENT, onSync);
+    return () => window.removeEventListener(DISMISSED_ALERTS_EVENT, onSync);
+  }, [vendor]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(getDismissedStorageKey(vendor), JSON.stringify(dismissedKeys));
-    } catch {
-      // Ignored in restricted storage mode
+    if (openConfigSignal > 0) {
+      setShowConfig(true);
+      setTimeout(() => {
+        sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }, 60);
     }
-  }, [dismissedKeys, vendor]);
+  }, [openConfigSignal]);
+
+  useEffect(() => {
+    setDraftSettings(overview.alertSettings);
+  }, [overview.alertSettings]);
 
   const allAlerts = overview.alerts ?? [];
   const dismissedSet = new Set(dismissedKeys);
@@ -132,6 +126,9 @@ export function OverviewAlertCenter({
     if (categoryFilter === 'all') return true;
     if (categoryFilter === 'bandwidth') {
       return a.category === 'bandwidth' || a.category === 'link-down';
+    }
+    if (categoryFilter === 'traffic-anomaly') {
+      return a.category === 'traffic-volume' || a.category === 'anomaly';
     }
     if (categoryFilter === 'ips-malware') {
       return a.category === 'ips' || a.category === 'malware';
@@ -146,11 +143,11 @@ export function OverviewAlertCenter({
 
   const handleDismiss = (alert: OverviewAlert) => {
     const key = getAlertFingerprint(alert);
-    setDismissedKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
+    setDismissedKeys(dismissAlertKey(vendor, key));
   };
 
   const handleRestoreDismissed = () => {
-    setDismissedKeys([]);
+    setDismissedKeys(restoreAllDismissedAlerts(vendor));
   };
 
   const handleSaveSettings = async () => {
@@ -168,10 +165,18 @@ export function OverviewAlertCenter({
           overview: AuditOverview;
         };
         if (data.overview) {
+          window.dispatchEvent(new CustomEvent(REEVALUATE_TOASTS_EVENT));
           onOverviewUpdated(data.overview);
+          const count = data.overview.alerts?.length ?? 0;
+          setConfigFeedback(
+            count > 0
+              ? `Regras salvas — ${count} alerta(s) ativo(s) notificados na interface.`
+              : 'Regras salvas — nenhum limite ou anomalia atingido.'
+          );
+        } else {
+          setConfigFeedback('Limites aplicados e alertas reavaliados.');
         }
-        setConfigFeedback('Limites aplicados e alertas reavaliados.');
-        setTimeout(() => setConfigFeedback(null), 2500);
+        setTimeout(() => setConfigFeedback(null), 4000);
       }
     } finally {
       setSavingConfig(false);
@@ -180,6 +185,7 @@ export function OverviewAlertCenter({
 
   const hasCritical = criticalCount > 0;
   const hasAnyAlert = activeAlerts.length > 0;
+  const cfg = overview.alertSettings;
 
   const containerStyle = hasCritical
     ? 'bg-red-50/90 border-red-300'
@@ -189,7 +195,8 @@ export function OverviewAlertCenter({
 
   return (
     <section
-      aria-label="Notificações e Alertas Imediatos"
+      ref={sectionRef}
+      aria-label="Notificações, Limites de Tráfego e Detecção de Anomalias"
       className={`border rounded-lg p-4 space-y-3 transition-colors ${containerStyle}`}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -216,8 +223,8 @@ export function OverviewAlertCenter({
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-sm font-semibold text-[var(--fw-heading)]">
                 {hasAnyAlert
-                  ? 'Notificações de Segurança e Consumo de Banda'
-                  : 'Monitoramento Ativo — Sem Alertas Críticos'}
+                  ? 'Notificações de Tráfego, Anomalias e Segurança'
+                  : 'Monitoramento Ativo — Sem Alertas ou Anomalias'}
               </h2>
               {hasAnyAlert && (
                 <span className="text-xs font-mono tabular-nums font-semibold text-[var(--fw-heading)]">
@@ -227,35 +234,25 @@ export function OverviewAlertCenter({
               )}
             </div>
             <p className="text-xs text-[var(--fw-text-muted)] mt-0.5 tabular-nums">
-              {hasAnyAlert ? (
-                <>
-                  Limite de banda:{' '}
-                  <span className="font-mono font-medium">
-                    {overview.alertSettings.bandwidthUtilizationLimitPercent}%
-                  </span>
-                  {overview.alertSettings.bandwidthMbpsLimit > 0
-                    ? ` ou ${overview.alertSettings.bandwidthMbpsLimit} Mbps`
-                    : ''}
-                  {' · '}IPS malicioso:{' '}
-                  <span className="font-mono font-medium">
-                    {overview.alertSettings.alertOnIps ? 'ativo' : 'pausado'}
-                  </span>
-                  {' · '}Logs suspeitos ≥{' '}
-                  <span className="font-mono font-medium">
-                    {overview.alertSettings.suspiciousBlockThreshold}
-                  </span>{' '}
-                  bloqueios
-                </>
-              ) : (
-                <>
-                  Nenhuma interface ultrapassou{' '}
-                  {overview.alertSettings.bandwidthUtilizationLimitPercent}%
-                  {overview.alertSettings.bandwidthMbpsLimit > 0
-                    ? ` (${overview.alertSettings.bandwidthMbpsLimit} Mbps)`
-                    : ''}{' '}
-                  e nenhum evento crítico/IPS malicioso está pendente.
-                </>
-              )}
+              Banda ≥{' '}
+              <span className="font-mono font-medium">{cfg.bandwidthUtilizationLimitPercent}%</span>
+              {cfg.bandwidthMbpsLimit > 0 ? ` / ${cfg.bandwidthMbpsLimit} Mbps` : ''}
+              {cfg.hourlyLogVolumeLimit > 0
+                ? ` · Logs/h ≥ ${cfg.hourlyLogVolumeLimit.toLocaleString('pt-BR')}`
+                : ''}
+              {cfg.syslogTrafficMbLimit > 0 ? ` · Volume ≥ ${cfg.syslogTrafficMbLimit} MB` : ''}
+              {' · '}Anomalias:{' '}
+              <span className="font-mono font-medium">
+                {cfg.anomalyDetectionEnabled
+                  ? `pico ${cfg.anomalySpikeMultiplier}x`
+                  : 'desligada'}
+              </span>
+              {cfg.blockedTrafficRatioLimitPercent > 0
+                ? ` / bloqueio ≥ ${cfg.blockedTrafficRatioLimitPercent}%`
+                : ''}
+              {cfg.portScanUniquePortsThreshold > 0
+                ? ` / scan ≥ ${cfg.portScanUniquePortsThreshold} portas`
+                : ''}
             </p>
           </div>
         </div>
@@ -265,7 +262,7 @@ export function OverviewAlertCenter({
             <button
               type="button"
               onClick={handleRestoreDismissed}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-bg)]"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-bg)] whitespace-nowrap"
             >
               <RotateCcw className="w-3.5 h-3.5" />
               Reexibir {dismissedActiveCount} silenciado(s)
@@ -281,101 +278,234 @@ export function OverviewAlertCenter({
             }`}
           >
             <Settings2 className="w-3.5 h-3.5" />
-            Limites de Alerta
+            Limites &amp; Anomalias
           </button>
         </div>
       </div>
 
       {showConfig && (
         <div className="bg-white border border-[var(--fw-border)] rounded-md p-4 space-y-4">
-          <div className="flex items-center justify-between border-b border-[var(--fw-border-soft)] pb-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--fw-border-soft)] pb-2.5">
             <span className="text-xs font-semibold text-[var(--fw-heading)] inline-flex items-center gap-1.5">
               <Bell className="w-3.5 h-3.5 text-[var(--fw-accent)]" />
-              Configurar Gatilhos de Notificação Imediata
+              Configurar Limites de Tráfego e Regras de Anomalia nos Logs
             </span>
             {configFeedback && (
               <span className="text-xs font-medium text-emerald-800">{configFeedback}</span>
             )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-            <label className="block space-y-1.5">
-              <span className="font-medium text-[var(--fw-text-body)]">
-                Limite de Uso do Link (%)
-              </span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min={5}
-                  max={100}
-                  step={5}
-                  value={draftSettings.bandwidthUtilizationLimitPercent}
-                  onChange={(e) =>
-                    setDraftSettings((s) => ({
-                      ...s,
-                      bandwidthUtilizationLimitPercent: Number(e.target.value),
-                    }))
-                  }
-                  className="flex-1 accent-[var(--fw-accent)]"
-                />
+          <div className="space-y-2.5">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--fw-text-subtle)]">
+              1. Limites de Tráfego &amp; Volume de Logs
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 text-xs">
+              <label className="block space-y-1.5">
+                <span className="font-medium text-[var(--fw-text-body)]">
+                  Uso do Link (%)
+                </span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={5}
+                    max={100}
+                    step={5}
+                    value={draftSettings.bandwidthUtilizationLimitPercent}
+                    onChange={(e) =>
+                      setDraftSettings((s) => ({
+                        ...s,
+                        bandwidthUtilizationLimitPercent: Number(e.target.value),
+                      }))
+                    }
+                    className="flex-1 accent-[var(--fw-accent)]"
+                  />
+                  <input
+                    type="number"
+                    min={5}
+                    max={100}
+                    value={draftSettings.bandwidthUtilizationLimitPercent}
+                    onChange={(e) =>
+                      setDraftSettings((s) => ({
+                        ...s,
+                        bandwidthUtilizationLimitPercent: Number(e.target.value),
+                      }))
+                    }
+                    className="w-16 px-2 py-1 border border-[var(--fw-border-strong)] rounded font-mono text-right tabular-nums text-[var(--fw-heading)] bg-[var(--fw-bg-input)]"
+                  />
+                </div>
+              </label>
+
+              <label className="block space-y-1.5">
+                <span className="font-medium text-[var(--fw-text-body)]">
+                  Banda Absoluta (Mbps, 0 = off)
+                </span>
                 <input
                   type="number"
-                  min={5}
-                  max={100}
-                  value={draftSettings.bandwidthUtilizationLimitPercent}
+                  min={0}
+                  max={100000}
+                  step={10}
+                  value={draftSettings.bandwidthMbpsLimit}
                   onChange={(e) =>
                     setDraftSettings((s) => ({
                       ...s,
-                      bandwidthUtilizationLimitPercent: Number(e.target.value),
+                      bandwidthMbpsLimit: Math.max(0, Number(e.target.value) || 0),
                     }))
                   }
-                  className="w-16 px-2 py-1 border border-[var(--fw-border-strong)] rounded font-mono text-right text-[var(--fw-heading)] bg-[var(--fw-bg-input)]"
+                  placeholder="Ex: 250"
+                  className="w-full px-3 py-1.5 border border-[var(--fw-border-strong)] rounded font-mono tabular-nums text-[var(--fw-heading)] bg-[var(--fw-bg-input)]"
                 />
-              </div>
-            </label>
+              </label>
 
-            <label className="block space-y-1.5">
-              <span className="font-medium text-[var(--fw-text-body)]">
-                Limite Absoluto de Banda (Mbps, 0 = off)
-              </span>
-              <input
-                type="number"
-                min={0}
-                max={100000}
-                step={10}
-                value={draftSettings.bandwidthMbpsLimit}
-                onChange={(e) =>
-                  setDraftSettings((s) => ({
-                    ...s,
-                    bandwidthMbpsLimit: Math.max(0, Number(e.target.value) || 0),
-                  }))
-                }
-                placeholder="Ex: 250"
-                className="w-full px-3 py-1.5 border border-[var(--fw-border-strong)] rounded font-mono text-[var(--fw-heading)] bg-[var(--fw-bg-input)]"
-              />
-            </label>
+              <label className="block space-y-1.5">
+                <span className="font-medium text-[var(--fw-text-body)]">
+                  Volume em Syslogs (MB, 0 = off)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={1000000}
+                  step={0.5}
+                  value={draftSettings.syslogTrafficMbLimit}
+                  onChange={(e) =>
+                    setDraftSettings((s) => ({
+                      ...s,
+                      syslogTrafficMbLimit: Math.max(0, Number(e.target.value) || 0),
+                    }))
+                  }
+                  placeholder="Ex: 50"
+                  className="w-full px-3 py-1.5 border border-[var(--fw-border-strong)] rounded font-mono tabular-nums text-[var(--fw-heading)] bg-[var(--fw-bg-input)]"
+                />
+              </label>
 
-            <label className="block space-y-1.5">
-              <span className="font-medium text-[var(--fw-text-body)]">
-                Limiar de Bloqueios Suspeitos (por IP)
-              </span>
-              <input
-                type="number"
-                min={1}
-                max={100}
-                value={draftSettings.suspiciousBlockThreshold}
-                onChange={(e) =>
-                  setDraftSettings((s) => ({
-                    ...s,
-                    suspiciousBlockThreshold: Math.max(1, Number(e.target.value) || 1),
-                  }))
-                }
-                className="w-full px-3 py-1.5 border border-[var(--fw-border-strong)] rounded font-mono text-[var(--fw-heading)] bg-[var(--fw-bg-input)]"
-              />
-            </label>
+              <label className="block space-y-1.5">
+                <span className="font-medium text-[var(--fw-text-body)]">
+                  Limite de Logs por Hora (0 = off)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={500000}
+                  step={5}
+                  value={draftSettings.hourlyLogVolumeLimit}
+                  onChange={(e) =>
+                    setDraftSettings((s) => ({
+                      ...s,
+                      hourlyLogVolumeLimit: Math.max(0, Number(e.target.value) || 0),
+                    }))
+                  }
+                  placeholder="Ex: 500"
+                  className="w-full px-3 py-1.5 border border-[var(--fw-border-strong)] rounded font-mono tabular-nums text-[var(--fw-heading)] bg-[var(--fw-bg-input)]"
+                />
+              </label>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-[var(--fw-border-soft)] text-xs">
+          <div className="pt-3 border-t border-[var(--fw-border-soft)] space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--fw-text-subtle)]">
+                2. Detecção de Anomalias nos Logs
+              </p>
+              <label className="inline-flex items-center gap-2 text-xs font-medium text-[var(--fw-heading)] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={draftSettings.anomalyDetectionEnabled}
+                  onChange={(e) =>
+                    setDraftSettings((s) => ({
+                      ...s,
+                      anomalyDetectionEnabled: e.target.checked,
+                    }))
+                  }
+                  className="rounded border-[var(--fw-border-strong)] accent-[var(--fw-accent)]"
+                />
+                Ativar detecção automática de picos e varreduras multi-porta
+              </label>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 text-xs">
+              <label className="block space-y-1.5">
+                <span className="font-medium text-[var(--fw-text-body)]">
+                  Multiplicador de Pico Horário (x)
+                </span>
+                <input
+                  type="number"
+                  min={1.2}
+                  max={20}
+                  step={0.5}
+                  disabled={!draftSettings.anomalyDetectionEnabled}
+                  value={draftSettings.anomalySpikeMultiplier}
+                  onChange={(e) =>
+                    setDraftSettings((s) => ({
+                      ...s,
+                      anomalySpikeMultiplier: Math.max(1.2, Number(e.target.value) || 2.5),
+                    }))
+                  }
+                  className="w-full px-3 py-1.5 border border-[var(--fw-border-strong)] rounded font-mono tabular-nums text-[var(--fw-heading)] bg-[var(--fw-bg-input)] disabled:opacity-50"
+                />
+              </label>
+
+              <label className="block space-y-1.5">
+                <span className="font-medium text-[var(--fw-text-body)]">
+                  Taxa de Bloqueio Anômala (%, 0 = off)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={draftSettings.blockedTrafficRatioLimitPercent}
+                  onChange={(e) =>
+                    setDraftSettings((s) => ({
+                      ...s,
+                      blockedTrafficRatioLimitPercent: Math.max(0, Number(e.target.value) || 0),
+                    }))
+                  }
+                  className="w-full px-3 py-1.5 border border-[var(--fw-border-strong)] rounded font-mono tabular-nums text-[var(--fw-heading)] bg-[var(--fw-bg-input)]"
+                />
+              </label>
+
+              <label className="block space-y-1.5">
+                <span className="font-medium text-[var(--fw-text-body)]">
+                  Port Scan: Portas Únicas/IP (0 = off)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={1}
+                  disabled={!draftSettings.anomalyDetectionEnabled}
+                  value={draftSettings.portScanUniquePortsThreshold}
+                  onChange={(e) =>
+                    setDraftSettings((s) => ({
+                      ...s,
+                      portScanUniquePortsThreshold: Math.max(0, Number(e.target.value) || 0),
+                    }))
+                  }
+                  className="w-full px-3 py-1.5 border border-[var(--fw-border-strong)] rounded font-mono tabular-nums text-[var(--fw-heading)] bg-[var(--fw-bg-input)] disabled:opacity-50"
+                />
+              </label>
+
+              <label className="block space-y-1.5">
+                <span className="font-medium text-[var(--fw-text-body)]">
+                  Bloqueios Suspeitos por IP
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={draftSettings.suspiciousBlockThreshold}
+                  onChange={(e) =>
+                    setDraftSettings((s) => ({
+                      ...s,
+                      suspiciousBlockThreshold: Math.max(1, Number(e.target.value) || 1),
+                    }))
+                  }
+                  className="w-full px-3 py-1.5 border border-[var(--fw-border-strong)] rounded font-mono tabular-nums text-[var(--fw-heading)] bg-[var(--fw-bg-input)]"
+                />
+              </label>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-4 pt-3 border-t border-[var(--fw-border-soft)] text-xs">
             <div className="flex flex-wrap items-center gap-5">
               <label className="inline-flex items-center gap-2 text-[var(--fw-text-body)] cursor-pointer">
                 <input
@@ -406,7 +536,7 @@ export function OverviewAlertCenter({
               type="button"
               disabled={savingConfig}
               onClick={() => void handleSaveSettings()}
-              className="px-4 py-1.5 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-50"
+              className="px-4 py-1.5 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-50 whitespace-nowrap"
             >
               {savingConfig ? 'Aplicando...' : 'Aplicar Limites'}
             </button>
@@ -420,6 +550,10 @@ export function OverviewAlertCenter({
             {(
               [
                 { id: 'all', label: `Todos (${activeAlerts.length})` },
+                {
+                  id: 'traffic-anomaly',
+                  label: `Tráfego & Anomalias (${activeAlerts.filter((a) => a.category === 'traffic-volume' || a.category === 'anomaly').length})`,
+                },
                 {
                   id: 'bandwidth',
                   label: `Banda / Links (${activeAlerts.filter((a) => a.category === 'bandwidth' || a.category === 'link-down').length})`,
@@ -438,7 +572,7 @@ export function OverviewAlertCenter({
                 key={tab.id}
                 type="button"
                 onClick={() => setCategoryFilter(tab.id)}
-                className={`px-2.5 py-1 rounded border text-xs font-medium transition-colors ${
+                className={`px-2.5 py-1 rounded border text-xs font-medium transition-colors whitespace-nowrap ${
                   categoryFilter === tab.id
                     ? 'bg-[var(--fw-accent)] text-white border-[var(--fw-accent)]'
                     : 'bg-white text-[var(--fw-text-body)] border-[var(--fw-border)] hover:bg-[var(--fw-bg)]'
@@ -479,7 +613,7 @@ export function OverviewAlertCenter({
                             ·
                           </span>
                           <span className="font-medium text-[var(--fw-text-body)]">
-                            {getCategoryLabel(alert.category)}
+                            {getAlertCategoryLabel(alert.category)}
                           </span>
                           <span className="text-[var(--fw-text-faint)]" aria-hidden="true">
                             ·
@@ -498,7 +632,9 @@ export function OverviewAlertCenter({
                             </>
                           )}
                         </div>
-                        <p className="text-xs font-semibold text-[var(--fw-heading)]">{alert.title}</p>
+                        <p className="text-xs font-semibold text-[var(--fw-heading)]">
+                          {alert.title}
+                        </p>
                         <p className="text-xs text-[var(--fw-text-muted)] leading-relaxed">
                           {alert.description}
                         </p>
@@ -510,7 +646,7 @@ export function OverviewAlertCenter({
                         <button
                           type="button"
                           onClick={() => onInvestigateSyslog(alert.syslogFilterQuery || '')}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded hover:bg-[var(--fw-surface)]"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded hover:bg-[var(--fw-surface)] whitespace-nowrap"
                         >
                           <Search className="w-3.5 h-3.5" />
                           Ver Logs
@@ -520,20 +656,23 @@ export function OverviewAlertCenter({
                         <button
                           type="button"
                           onClick={() => onAnalyzeWithAi(alert.aiPrompt || '')}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-white bg-[var(--fw-accent)] rounded hover:bg-[var(--fw-accent-hover)]"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-white bg-[var(--fw-accent)] rounded hover:bg-[var(--fw-accent-hover)] whitespace-nowrap"
                         >
                           <Bot className="w-3.5 h-3.5" />
                           Analisar IA
                         </button>
                       )}
-                      {(alert.category === 'bandwidth' || alert.category === 'link-down') && (
+                      {(alert.category === 'bandwidth' ||
+                        alert.category === 'link-down' ||
+                        alert.category === 'traffic-volume' ||
+                        alert.category === 'anomaly') && (
                         <button
                           type="button"
                           onClick={() => setShowConfig(true)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded hover:bg-[var(--fw-surface)]"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded hover:bg-[var(--fw-surface)] whitespace-nowrap"
                         >
                           <Settings2 className="w-3.5 h-3.5" />
-                          Ajustar Limite
+                          Ajustar Critério
                         </button>
                       )}
                       <button
