@@ -1,5 +1,6 @@
 import https from 'node:https';
 import http from 'node:http';
+import { appLog } from './appLogger.ts';
 import {
   asRecord,
   formatUptimeSeconds,
@@ -53,6 +54,17 @@ function extractArray(data: unknown, candidateKeys: string[]): Array<Record<stri
     const val = rec[key];
     if (Array.isArray(val)) {
       return val.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'));
+    }
+    if (val && typeof val === 'object') {
+      const nested = asRecord(val);
+      for (const subKey of ['ipv4', ...candidateKeys]) {
+        const subVal = nested[subKey];
+        if (Array.isArray(subVal)) {
+          return subVal.filter((item): item is Record<string, unknown> =>
+            Boolean(item && typeof item === 'object')
+          );
+        }
+      }
     }
   }
   return [];
@@ -191,14 +203,27 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
   });
 
   if (loginRes.status >= 400) {
+    const errRec = asRecord(loginRes.data);
+    const statusRec = asRecord(errRec.status);
+    const infoArr = Array.isArray(statusRec.info) ? statusRec.info : [];
+    const firstInfo = asRecord(infoArr[0]);
+    const detail =
+      pickString(firstInfo, ['message']) ||
+      pickString(errRec, ['message', 'error']) ||
+      (typeof loginRes.data === 'string' ? loginRes.data.slice(0, 180) : '');
     throw new Error(
-      `Falha na autenticação SonicOS (${loginRes.status}). Verifique usuário, senha e se a API REST (SonicOS API) está habilitada no appliance.`
+      `Falha na autenticação SonicOS (${loginRes.status})${detail ? `: ${detail}` : ''}. Verifique usuário, senha e se a API REST (SonicOS API) está habilitada no appliance.`
     );
   }
 
+  const loginData = asRecord(loginRes.data);
+  const bearerToken = pickString(loginData, ['token', 'access_token']);
   const cookies = loginRes.headers['set-cookie'];
   if (cookies && cookies.length > 0) {
     authHeaders.Cookie = cookies.map((c) => c.split(';')[0]).join('; ');
+  }
+  if (bearerToken) {
+    authHeaders.Authorization = `Bearer ${bearerToken}`;
   }
 
   const safeGet = (endpoint: string) =>
@@ -208,7 +233,7 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
     }).catch(() => ({ status: 404, data: {}, headers: {} }));
 
   try {
-    const [
+    let [
       rulesRes,
       natsRes,
       ruleStatsRes,
@@ -225,14 +250,8 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
       sslVpnRes,
       licensesRes,
     ] = await Promise.all([
-      requestSonicOs(baseUrl, '/api/sonicos/access-rules/ipv4', {
-        headers: authHeaders,
-        ignoreTlsErrors: params.ignoreTlsErrors,
-      }),
-      requestSonicOs(baseUrl, '/api/sonicos/nat-policies/ipv4', {
-        headers: authHeaders,
-        ignoreTlsErrors: params.ignoreTlsErrors,
-      }),
+      safeGet('/api/sonicos/access-rules/ipv4'),
+      safeGet('/api/sonicos/nat-policies/ipv4'),
       safeGet('/api/sonicos/reporting/access-rules'),
       safeGet('/api/sonicos/reporting/nat-policies'),
       safeGet('/api/sonicos/version'),
@@ -248,10 +267,38 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
       safeGet('/api/sonicos/reporting/licenses'),
     ]);
 
+    // Fallbacks para diferenças entre SonicOS 6.5 e SonicOS 7.x
+    let rawRulesList = extractArray(rulesRes.data, ['access_rules', 'access_rule', 'policies']);
+    if (rulesRes.status >= 400 || rawRulesList.length === 0) {
+      const altRules = await safeGet('/api/sonicos/access-rules');
+      const altList = extractArray(altRules.data, ['access_rules', 'access_rule', 'policies']);
+      if (altRules.status < 400 && altList.length > 0) {
+        rulesRes = altRules;
+        rawRulesList = altList;
+      }
+    }
+
+    let rawNatsList = extractArray(natsRes.data, ['nat_policies', 'nat_policy', 'policies']);
+    if (natsRes.status >= 400 || rawNatsList.length === 0) {
+      const altNats = await safeGet('/api/sonicos/nat-policies');
+      const altList = extractArray(altNats.data, ['nat_policies', 'nat_policy', 'policies']);
+      if (altNats.status < 400 && altList.length > 0) {
+        natsRes = altNats;
+        rawNatsList = altList;
+      }
+    }
+
+    if (ifaceStatsRes.status >= 400) {
+      const altIfaceStats = await safeGet('/api/sonicos/reporting/interfaces/ipv4');
+      if (altIfaceStats.status < 400) {
+        ifaceStatsRes = altIfaceStats;
+      }
+    }
+
     const parsed = parseSonicOsJson(
       {
-        access_rules: asRecord(rulesRes.data).access_rules || [],
-        nat_policies: asRecord(natsRes.data).nat_policies || [],
+        access_rules: rawRulesList,
+        nat_policies: rawNatsList,
       },
       'api'
     );
@@ -322,13 +369,14 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
 
     // CPU utilization
     const cpuObj = asRecord(cpuRes.data);
-    let cpuPercent = pickNumber(cpuObj, [
-      'total',
-      'cpu_utilization',
-      'utilization',
-      'average',
-      'core_utilization',
-    ]);
+    let cpuPercent =
+      pickNumber(cpuObj, [
+        'total',
+        'cpu_utilization',
+        'utilization',
+        'average',
+        'core_utilization',
+      ]) ?? pickNumber(sysObj, ['cpu_utilization', 'cpu_percent', 'cpu']);
     if (cpuPercent === null) {
       const cores = extractArray(cpuRes.data, ['cores', 'core_utilization', 'cpu']);
       if (cores.length > 0) {
@@ -347,13 +395,14 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
     // Memory utilization
     const memObj = asRecord(memRes.data);
     const memInner = Object.keys(asRecord(memObj.memory)).length > 0 ? asRecord(memObj.memory) : memObj;
-    let memoryPercent = pickNumber(memInner, [
-      'used_percent',
-      'memory_utilization',
-      'ram_utilization',
-      'utilization',
-      'percent',
-    ]);
+    let memoryPercent =
+      pickNumber(memInner, [
+        'used_percent',
+        'memory_utilization',
+        'ram_utilization',
+        'utilization',
+        'percent',
+      ]) ?? pickNumber(sysObj, ['memory_utilization', 'ram_utilization', 'memory_percent']);
     if (memoryPercent === null) {
       const used = pickNumber(memInner, ['used', 'used_bytes', 'used_mb']);
       const total = pickNumber(memInner, ['total', 'total_bytes', 'total_mb']);
@@ -368,19 +417,21 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
     // Active / Max connections
     const connObj = asRecord(connRes.data);
     const connInner = Object.keys(asRecord(connObj.connections)).length > 0 ? asRecord(connObj.connections) : connObj;
-    const activeConnections = pickNumber(connInner, [
-      'active_connections',
-      'current_connections',
-      'active',
-      'current',
-      'count',
-    ]);
-    const maxConnections = pickNumber(connInner, [
-      'max_connections',
-      'maximum_connections',
-      'max',
-      'limit',
-    ]);
+    const activeConnections =
+      pickNumber(connInner, [
+        'active_connections',
+        'current_connections',
+        'active',
+        'current',
+        'count',
+      ]) ?? pickNumber(sysObj, ['active_connections', 'current_connections']);
+    const maxConnections =
+      pickNumber(connInner, [
+        'max_connections',
+        'maximum_connections',
+        'max',
+        'limit',
+      ]) ?? pickNumber(sysObj, ['max_connections', 'maximum_connections']);
 
     // Interfaces & link consumption
     const ifaceConfigs = extractArray(ifaceCfgRes.data, ['interfaces', 'interface', 'ipv4']);
@@ -540,6 +591,23 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
       }
       return { service, status, expiresAt };
     });
+
+    const diagSummary = `rules=${rulesRes.status}(${rules.length}), nats=${natsRes.status}(${nats.length}), ver=${versionRes.status}, cpu=${cpuRes.status}(${cpuPercent ?? '-'}%), mem=${memRes.status}(${memoryPercent ?? '-'}%), ifaces=${ifaceCfgRes.status}/${ifaceStatsRes.status}(${interfaces.length}), vpn=${vpnRes.status}(${vpns.length})`;
+    if (rules.length === 0 && interfaces.length === 0) {
+      appLog.warn(
+        'sonicwall',
+        'sonicos-api',
+        `Coleta SonicOS (${cleanHost}:${params.port}) retornou vazia`,
+        diagSummary
+      );
+    } else {
+      appLog.info(
+        'sonicwall',
+        'sonicos-api',
+        `Coleta SonicOS (${cleanHost}:${params.port})`,
+        diagSummary
+      );
+    }
 
     return {
       rules,
