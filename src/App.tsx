@@ -1,18 +1,51 @@
-import { useCallback, useEffect, useState } from 'react';
-import { AccountPasswordModal } from './components/AccountPasswordModal.tsx';
-import { AiAnalystView } from './components/AiAnalystView.tsx';
-import { ConnectLinuxView } from './components/ConnectLinuxView.tsx';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { LoginView } from './components/LoginView.tsx';
 import { NotificationToastStack } from './components/NotificationToastStack.tsx';
-import { OverviewView } from './components/OverviewView.tsx';
-import { ReportsView } from './components/ReportsView.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
-import { SyslogView } from './components/SyslogView.tsx';
 import { TopBar } from './components/TopBar.tsx';
-import { UnusedNatsView } from './components/UnusedNatsView.tsx';
-import { UnusedRulesView } from './components/UnusedRulesView.tsx';
 import type { ActiveSection, AuditOverview, AuthStatus, FirewallVendor } from './types.ts';
 import { setSelectedSiteId, vendorApiUrl } from './utils/vendorApi.ts';
+
+const AccountPasswordModal = lazy(() =>
+  import('./components/AccountPasswordModal.tsx').then((m) => ({ default: m.AccountPasswordModal }))
+);
+const AiAnalystView = lazy(() =>
+  import('./components/AiAnalystView.tsx').then((m) => ({ default: m.AiAnalystView }))
+);
+const ConnectLinuxView = lazy(() =>
+  import('./components/ConnectLinuxView.tsx').then((m) => ({ default: m.ConnectLinuxView }))
+);
+const OverviewView = lazy(() =>
+  import('./components/OverviewView.tsx').then((m) => ({ default: m.OverviewView }))
+);
+const ReportsView = lazy(() =>
+  import('./components/ReportsView.tsx').then((m) => ({ default: m.ReportsView }))
+);
+const SyslogView = lazy(() =>
+  import('./components/SyslogView.tsx').then((m) => ({ default: m.SyslogView }))
+);
+const UnusedNatsView = lazy(() =>
+  import('./components/UnusedNatsView.tsx').then((m) => ({ default: m.UnusedNatsView }))
+);
+const UnusedRulesView = lazy(() =>
+  import('./components/UnusedRulesView.tsx').then((m) => ({ default: m.UnusedRulesView }))
+);
+
+function ViewFallback() {
+  return (
+    <div className="space-y-4 animate-pulse">
+      <div className="h-8 w-56 bg-slate-200/70 rounded" />
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="h-28 bg-white border border-[var(--fw-border)] rounded-xl" />
+        <div className="h-28 bg-white border border-[var(--fw-border)] rounded-xl" />
+        <div className="h-28 bg-white border border-[var(--fw-border)] rounded-xl" />
+        <div className="h-28 bg-white border border-[var(--fw-border)] rounded-xl" />
+      </div>
+      <div className="h-72 bg-white border border-[var(--fw-border)] rounded-xl" />
+    </div>
+  );
+}
 
 const VENDOR_STORAGE_KEY = 'fwaudit:active-vendor';
 
@@ -65,10 +98,17 @@ export default function App() {
     void fetchAuthStatus();
   }, [fetchAuthStatus]);
 
+  const overviewAbortRef = useRef<AbortController | null>(null);
+
   const fetchOverview = useCallback(async () => {
     if (!auth?.authenticated) return;
+    overviewAbortRef.current?.abort();
+    const controller = new AbortController();
+    overviewAbortRef.current = controller;
     try {
-      const res = await fetch(vendorApiUrl(activeVendor, '/overview'));
+      const res = await fetch(vendorApiUrl(activeVendor, '/overview'), {
+        signal: controller.signal,
+      });
       if (res.status === 401) {
         setAuth((prev) => (prev ? { ...prev, authenticated: false, username: null } : prev));
         return;
@@ -78,10 +118,20 @@ export default function App() {
         if (data.activeSite?.id) setSelectedSiteId(activeVendor, data.activeSite.id);
         setOverview(data);
       }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
     } finally {
-      setLoading(false);
+      if (overviewAbortRef.current === controller) {
+        setLoading(false);
+      }
     }
   }, [auth?.authenticated, activeVendor]);
+
+  useEffect(() => {
+    return () => {
+      overviewAbortRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     if (auth?.authenticated) {
@@ -223,81 +273,87 @@ export default function App() {
         />
 
         <main className="flex-1 p-6 max-w-[1440px] w-full mx-auto">
-          {activeSection === 'overview' && (
-            <OverviewView
-              vendor={activeVendor}
-              overview={overview}
-              loading={loading}
-              onNavigate={setActiveSection}
-              onLoadSample={() => void handleLoadSample()}
-              onOverviewUpdated={applyOverview}
-              onInvestigateSyslog={handleInvestigateSyslog}
-              onAnalyzeWithAi={handleAnalyzeEventWithAi}
-              openAlertConfigSignal={openAlertConfigSignal}
-            />
-          )}
+          <ErrorBoundary resetKey={`${activeVendor}:${activeSection}`}>
+            <Suspense fallback={<ViewFallback />}>
+              {activeSection === 'overview' && (
+                <OverviewView
+                  vendor={activeVendor}
+                  overview={overview}
+                  loading={loading}
+                  onNavigate={setActiveSection}
+                  onLoadSample={() => void handleLoadSample()}
+                  onOverviewUpdated={applyOverview}
+                  onInvestigateSyslog={handleInvestigateSyslog}
+                  onAnalyzeWithAi={handleAnalyzeEventWithAi}
+                  openAlertConfigSignal={openAlertConfigSignal}
+                />
+              )}
 
-          {activeSection === 'syslogs' && (
-            <SyslogView
-              vendor={activeVendor}
-              refreshToken={refreshToken}
-              onDataChanged={handleDataChanged}
-              onAnalyzeEvent={handleAnalyzeEventWithAi}
-              pendingQuery={pendingSyslogQuery}
-              onConsumePendingQuery={() => setPendingSyslogQuery(null)}
-            />
-          )}
+              {activeSection === 'syslogs' && (
+                <SyslogView
+                  vendor={activeVendor}
+                  refreshToken={refreshToken}
+                  onDataChanged={handleDataChanged}
+                  onAnalyzeEvent={handleAnalyzeEventWithAi}
+                  pendingQuery={pendingSyslogQuery}
+                  onConsumePendingQuery={() => setPendingSyslogQuery(null)}
+                />
+              )}
 
-          {activeSection === 'rules' && (
-            <UnusedRulesView
-              vendor={activeVendor}
-              refreshToken={refreshToken}
-              onGoToConnect={() => setActiveSection('connect')}
-            />
-          )}
+              {activeSection === 'rules' && (
+                <UnusedRulesView
+                  vendor={activeVendor}
+                  refreshToken={refreshToken}
+                  onGoToConnect={() => setActiveSection('connect')}
+                />
+              )}
 
-          {activeSection === 'nats' && (
-            <UnusedNatsView
-              vendor={activeVendor}
-              refreshToken={refreshToken}
-              onGoToConnect={() => setActiveSection('connect')}
-            />
-          )}
+              {activeSection === 'nats' && (
+                <UnusedNatsView
+                  vendor={activeVendor}
+                  refreshToken={refreshToken}
+                  onGoToConnect={() => setActiveSection('connect')}
+                />
+              )}
 
-          {activeSection === 'reports' && (
-            <ReportsView
-              vendor={activeVendor}
-              refreshToken={refreshToken}
-              onGoToConnect={() => setActiveSection('connect')}
-              onLoadSample={() => void handleLoadSample()}
-            />
-          )}
+              {activeSection === 'reports' && (
+                <ReportsView
+                  vendor={activeVendor}
+                  refreshToken={refreshToken}
+                  onGoToConnect={() => setActiveSection('connect')}
+                  onLoadSample={() => void handleLoadSample()}
+                />
+              )}
 
-          {activeSection === 'ai' && (
-            <AiAnalystView
-              vendor={activeVendor}
-              overview={overview}
-              pendingPrompt={pendingAiPrompt}
-              onConsumePendingPrompt={() => setPendingAiPrompt(null)}
-            />
-          )}
+              {activeSection === 'ai' && (
+                <AiAnalystView
+                  vendor={activeVendor}
+                  overview={overview}
+                  pendingPrompt={pendingAiPrompt}
+                  onConsumePendingPrompt={() => setPendingAiPrompt(null)}
+                />
+              )}
 
-          {activeSection === 'connect' && (
-            <ConnectLinuxView
-              vendor={activeVendor}
-              overview={overview}
-              onDataChanged={handleDataChanged}
-              onOverviewUpdated={applyOverview}
-            />
-          )}
+              {activeSection === 'connect' && (
+                <ConnectLinuxView
+                  vendor={activeVendor}
+                  overview={overview}
+                  onDataChanged={handleDataChanged}
+                  onOverviewUpdated={applyOverview}
+                />
+              )}
+            </Suspense>
+          </ErrorBoundary>
         </main>
       </div>
 
       {showPasswordModal && auth.username && (
-        <AccountPasswordModal
-          username={auth.username}
-          onClose={() => setShowPasswordModal(false)}
-        />
+        <Suspense fallback={null}>
+          <AccountPasswordModal
+            username={auth.username}
+            onClose={() => setShowPasswordModal(false)}
+          />
+        </Suspense>
       )}
 
       <NotificationToastStack

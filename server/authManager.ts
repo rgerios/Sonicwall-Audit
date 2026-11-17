@@ -1,9 +1,12 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import type { Request, Response } from 'express';
 import type { PostgresStore } from './database.ts';
 import type { AuthStatus } from './types.ts';
+
+const scryptAsync = promisify(crypto.scrypt);
 
 interface StoredUser {
   username: string;
@@ -174,19 +177,19 @@ export class AuthManager {
     });
   }
 
-  private hashPassword(password: string): string {
+  private async hashPassword(password: string): Promise<string> {
     const salt = crypto.randomBytes(16).toString('hex');
-    const derived = crypto.scryptSync(password, salt, 64).toString('hex');
-    return `${salt}:${derived}`;
+    const derived = (await scryptAsync(password, salt, 64)) as Buffer;
+    return `${salt}:${derived.toString('hex')}`;
   }
 
-  private verifyPassword(password: string, storedHash: string): boolean {
+  private async verifyPassword(password: string, storedHash: string): Promise<boolean> {
     const parts = storedHash.split(':');
     if (parts.length !== 2) return false;
     const [salt, keyHex] = parts;
     if (!salt || !keyHex) return false;
     const keyBuf = Buffer.from(keyHex, 'hex');
-    const derivedBuf = crypto.scryptSync(password, salt, 64);
+    const derivedBuf = (await scryptAsync(password, salt, 64)) as Buffer;
     if (keyBuf.length !== derivedBuf.length) return false;
     return crypto.timingSafeEqual(keyBuf, derivedBuf);
   }
@@ -209,7 +212,7 @@ export class AuthManager {
     }
     const newUser: StoredUser = {
       username,
-      passwordHash: this.hashPassword(password),
+      passwordHash: await this.hashPassword(password),
       role: 'admin',
       createdAt: new Date().toISOString(),
     };
@@ -225,11 +228,11 @@ export class AuthManager {
     return username;
   }
 
-  authenticateUser(usernameRaw: string, password: string): string | null {
+  async authenticateUser(usernameRaw: string, password: string): Promise<string | null> {
     const username = usernameRaw.trim().toLowerCase();
     const found = this.data.users.find((u) => u.username.toLowerCase() === username);
     if (!found) return null;
-    if (!this.verifyPassword(password, found.passwordHash)) return null;
+    if (!(await this.verifyPassword(password, found.passwordHash))) return null;
     return found.username;
   }
 
@@ -243,13 +246,13 @@ export class AuthManager {
     if (!found) {
       throw new Error('Usuário não encontrado.');
     }
-    if (!this.verifyPassword(currentPassword, found.passwordHash)) {
+    if (!(await this.verifyPassword(currentPassword, found.passwordHash))) {
       throw new Error('Senha atual incorreta.');
     }
     if (newPassword.length < MIN_PASSWORD_LENGTH) {
       throw new Error(`A nova senha deve ter pelo menos ${MIN_PASSWORD_LENGTH} caracteres.`);
     }
-    const nextHash = this.hashPassword(newPassword);
+    const nextHash = await this.hashPassword(newPassword);
     found.passwordHash = nextHash;
     if (this.pgStore && this.pgStore.isEnabled()) {
       await this.pgStore.updateUserPassword(found.username, nextHash);

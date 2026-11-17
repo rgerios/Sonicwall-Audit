@@ -75,7 +75,11 @@ function formatText(msg: NotificationMessage): string {
 }
 
 async function postJson(url: string, body: unknown): Promise<void> {
-  const res = await fetch(url, {
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new Error('Protocolo de webhook não suportado (use http ou https).');
+  }
+  const res = await fetch(parsed.toString(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

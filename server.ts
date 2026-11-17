@@ -41,7 +41,7 @@ async function startApp(): Promise<void> {
   }
 
   // Automatic hourly purge across active vendor engines
-  setInterval(() => {
+  const purgeTimer = setInterval(() => {
     for (const eng of engines) {
       void eng.purgeExpired();
     }
@@ -56,8 +56,26 @@ async function startApp(): Promise<void> {
     res.setHeader('Referrer-Policy', 'same-origin');
     next();
   });
-  app.use(express.json({ limit: '50mb' }));
-  app.use(express.text({ limit: '50mb', type: ['text/plain', 'application/octet-stream'] }));
+  const largeJson = express.json({ limit: '50mb' });
+  const largeText = express.text({ limit: '50mb', type: ['text/plain', 'application/octet-stream'] });
+  const largePayloadPaths = new Set([
+    '/api/sonicwall/syslogs/ingest',
+    '/api/fortigate/syslogs/ingest',
+    '/api/syslogs/ingest',
+    '/api/sonicwall/config/import',
+    '/api/fortigate/config/import',
+    '/api/config/import',
+  ]);
+  const defaultJson = express.json({ limit: '2mb' });
+  const defaultText = express.text({ limit: '2mb', type: ['text/plain', 'application/octet-stream'] });
+  app.use((req, res, next) => {
+    const parser = largePayloadPaths.has(req.path) ? largeJson : defaultJson;
+    parser(req, res, next);
+  });
+  app.use((req, res, next) => {
+    const parser = largePayloadPaths.has(req.path) ? largeText : defaultText;
+    parser(req, res, next);
+  });
 
   // Public health check
   app.get('/api/health', (_req, res) => {
@@ -112,7 +130,7 @@ async function startApp(): Promise<void> {
       return;
     }
     await authManager.refreshUsersIfStale(true);
-    const authedUser = authManager.authenticateUser(username, password);
+    const authedUser = await authManager.authenticateUser(username, password);
     if (!authedUser) {
       for (const k of lockKeys) authManager.registerLoginFailure(k);
       res.status(401).json({ error: 'Usuário ou senha inválidos.' });
@@ -220,6 +238,7 @@ async function startApp(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(`[${signal}] Encerrando: gravando dados pendentes...`);
+    clearInterval(purgeTimer);
     httpServer.close();
     try {
       await Promise.all(engines.map((e) => e.shutdown()));

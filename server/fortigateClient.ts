@@ -1,5 +1,12 @@
 import http from 'node:http';
 import https from 'node:https';
+import {
+  asRecord,
+  formatUptimeSeconds,
+  getTransportAgent,
+  pickNumber as pickNum,
+  pickString as pickStr,
+} from './clientUtils.ts';
 import type {
   FirewallRule,
   InterfaceTelemetry,
@@ -34,12 +41,6 @@ export interface FortiOsAuditResult {
   telemetry: TelemetrySnapshot;
 }
 
-function asRecord(val: unknown): Record<string, unknown> {
-  return val && typeof val === 'object' && !Array.isArray(val)
-    ? (val as Record<string, unknown>)
-    : {};
-}
-
 function asArray(val: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(val)) {
     return val.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'));
@@ -51,26 +52,6 @@ function asArray(val: unknown): Array<Record<string, unknown>> {
     );
   }
   return [];
-}
-
-function pickStr(obj: Record<string, unknown>, keys: string[]): string {
-  for (const k of keys) {
-    const v = obj[k];
-    if (typeof v === 'string' && v.trim()) return v.trim();
-  }
-  return '';
-}
-
-function pickNum(obj: Record<string, unknown>, keys: string[]): number | null {
-  for (const k of keys) {
-    const v = obj[k];
-    if (typeof v === 'number' && Number.isFinite(v)) return v;
-    if (typeof v === 'string' && v.trim()) {
-      const parsed = Number(v.replace(/[^0-9.\-]/g, ''));
-      if (Number.isFinite(parsed)) return parsed;
-    }
-  }
-  return null;
 }
 
 function joinNames(raw: unknown): string {
@@ -88,18 +69,6 @@ function joinNames(raw: unknown): string {
   return 'all';
 }
 
-function formatUptimeSeconds(totalSeconds: number): string {
-  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return '-';
-  const days = Math.floor(totalSeconds / 86400);
-  const hours = Math.floor((totalSeconds % 86400) / 3600);
-  const mins = Math.floor((totalSeconds % 3600) / 60);
-  const parts: string[] = [];
-  if (days > 0) parts.push(`${days}d`);
-  parts.push(`${hours}h`);
-  parts.push(`${mins}m`);
-  return parts.join(' ');
-}
-
 async function requestFortiOs(
   baseUrl: string,
   pathWithQuery: string,
@@ -109,7 +78,7 @@ async function requestFortiOs(
   const url = new URL(pathWithQuery, baseUrl);
   const isHttps = url.protocol === 'https:';
   const transport = isHttps ? https : http;
-  const agent = isHttps ? new https.Agent({ rejectUnauthorized: !ignoreTlsErrors }) : undefined;
+  const agent = getTransportAgent(isHttps, ignoreTlsErrors);
 
   return new Promise((resolve, reject) => {
     const req = transport.request(

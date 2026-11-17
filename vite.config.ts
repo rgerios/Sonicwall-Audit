@@ -1,14 +1,29 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import path from 'path';
-import {defineConfig} from 'vite';
+import path from 'node:path';
+import { defineConfig } from 'vite';
 
 export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname, '.'),
+      },
+    },
+    build: {
+      rolldownOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return;
+            if (id.includes('recharts') || id.includes('d3-')) return 'vendor-charts';
+            if (id.includes('jspdf') || id.includes('html2canvas') || id.includes('dompurify')) {
+              return 'vendor-pdf';
+            }
+            if (id.includes('motion')) return 'vendor-motion';
+            if (id.includes('lucide-react')) return 'vendor-icons';
+          },
+        },
       },
     },
     server: {

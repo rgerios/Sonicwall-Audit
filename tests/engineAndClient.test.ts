@@ -1,0 +1,129 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import {
+  addEventsToRuntime,
+  buildHourlyLogVolume,
+  computeWindowRankings,
+  diffPolicies,
+  emptyRuntime,
+} from '../server/engineHelpers.ts';
+import { normalizeRateMbps } from '../server/sonicosClient.ts';
+import type { FirewallRule, SyslogEvent } from '../server/types.ts';
+
+function makeEvent(overrides: Partial<SyslogEvent>): SyslogEvent {
+  const iso = new Date().toISOString();
+  return {
+    id: 'ev-1',
+    timestamp: iso.slice(0, 19).replace('T', ' '),
+    firewallHost: '192.168.1.1',
+    serialNumber: 'SN01',
+    priority: 6,
+    severity: 'info',
+    categoryCode: '1024',
+    categoryName: 'Traffic',
+    messageId: '537',
+    action: 'allow',
+    srcIp: '10.0.0.10',
+    srcPort: 50000,
+    srcZone: 'LAN',
+    dstIp: '1.1.1.1',
+    dstPort: 443,
+    dstZone: 'WAN',
+    natSrcIp: null,
+    natSrcPort: null,
+    natDstIp: null,
+    natDstPort: null,
+    protocol: 'tcp/https',
+    ruleRef: null,
+    natRuleRef: null,
+    bytesSent: 100,
+    bytesRcvd: 200,
+    appName: null,
+    user: null,
+    message: 'Allowed',
+    raw: '',
+    source: 'udp',
+    ingestedAt: iso,
+    ...overrides,
+  };
+}
+
+describe('sonicosClient & engineHelpers', () => {
+  it('normalizeRateMbps separates ingress_mbps (rx) and egress_mbps (tx)', () => {
+    const sample = { ingress_mbps: 42.5 };
+    assert.equal(normalizeRateMbps(sample, 'rx'), 42.5);
+    assert.equal(normalizeRateMbps(sample, 'tx'), 0);
+
+    const both = { ingress_mbps: 10, egress_mbps: 5.25 };
+    assert.equal(normalizeRateMbps(both, 'rx'), 10);
+    assert.equal(normalizeRateMbps(both, 'tx'), 5.25);
+  });
+
+  it('addEventsToRuntime, buildHourlyLogVolume and computeWindowRankings aggregate correctly', () => {
+    const now = Date.now();
+    const iso = new Date(now).toISOString();
+    const events: SyslogEvent[] = [
+      makeEvent({ id: '1', ingestedAt: iso, action: 'allow' }),
+      makeEvent({
+        id: '2',
+        ingestedAt: iso,
+        priority: 4,
+        severity: 'warning',
+        action: 'drop',
+        srcIp: '203.0.113.5',
+        srcZone: 'WAN',
+        dstIp: '192.168.1.10',
+        dstPort: 22,
+        dstZone: 'DMZ',
+        protocol: 'tcp/ssh',
+      }),
+    ];
+
+    const rt = emptyRuntime();
+    addEventsToRuntime(rt, events);
+    assert.equal(rt.total, 2);
+    assert.equal(rt.byAction.allow, 1);
+    assert.equal(rt.byAction.drop, 1);
+
+    const hourly = buildHourlyLogVolume(rt.hourly, now);
+    assert.equal(hourly.length, 24);
+    assert.equal(hourly[23].total, 2);
+    assert.equal(hourly[23].allow, 1);
+    assert.equal(hourly[23].blocked, 1);
+
+    const rankings = computeWindowRankings(events);
+    assert.equal(rankings.topBlockedSources[0].ip, '203.0.113.5');
+    assert.equal(rankings.topBlockedSources[0].count, 1);
+    assert.equal(rankings.topTargetedPorts.length, 2);
+  });
+
+  it('diffPolicies detects added, modified, and removed rules', () => {
+    const baseRule = (id: string, name: string, enabled = true): FirewallRule => ({
+      id,
+      name,
+      priority: 1,
+      fromZone: 'LAN',
+      toZone: 'WAN',
+      source: 'Any',
+      destination: 'Any',
+      service: 'HTTPS',
+      action: 'allow',
+      enabled,
+      applianceHits: 0,
+      syslogHits: 0,
+      lastHitAt: null,
+      comment: '',
+      status: 'active',
+      findingReason: '',
+      sourceOrigin: 'api',
+    });
+
+    const prev = [baseRule('1', 'Rule A', true), baseRule('2', 'Rule B', true)];
+    const next = [baseRule('1', 'Rule A', false), baseRule('3', 'Rule C', true)];
+    const details: string[] = [];
+    const diff = diffPolicies('Regra', prev, next, details);
+
+    assert.deepEqual(diff, { added: 1, removed: 1, modified: 1 });
+    assert.equal(details.length, 3);
+  });
+});

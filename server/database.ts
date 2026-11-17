@@ -200,7 +200,12 @@ export class PostgresStore {
 
       ALTER TABLE syslogs ADD COLUMN IF NOT EXISTS event_at TIMESTAMPTZ;
       ALTER TABLE syslogs ADD COLUMN IF NOT EXISTS search_text TEXT NOT NULL DEFAULT '';
-      UPDATE syslogs SET event_at = ingested_at WHERE event_at IS NULL;
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM syslogs WHERE event_at IS NULL LIMIT 1) THEN
+          UPDATE syslogs SET event_at = ingested_at WHERE event_at IS NULL;
+        END IF;
+      END $$;
 
       ALTER TABLE sites ADD COLUMN IF NOT EXISTS settings_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 
@@ -390,16 +395,18 @@ export class PostgresStore {
     // Apenas a janela recente de cada firewall vai para a memória; o histórico completo
     // permanece no banco e é consultado sob demanda.
     const syslogsBySite = new Map<string, SyslogEvent[]>();
-    for (const row of sitesRes.rows) {
-      const res = await pool.query<{ payload_json: SyslogEvent }>(
-        'SELECT payload_json FROM syslogs WHERE site_id = $1 ORDER BY ingested_at DESC LIMIT $2',
-        [row.id, syslogWindow]
-      );
-      syslogsBySite.set(
-        row.id,
-        res.rows.map((r) => r.payload_json)
-      );
-    }
+    await Promise.all(
+      sitesRes.rows.map(async (row) => {
+        const res = await pool.query<{ payload_json: SyslogEvent }>(
+          'SELECT payload_json FROM syslogs WHERE site_id = $1 ORDER BY ingested_at DESC LIMIT $2',
+          [row.id, syslogWindow]
+        );
+        syslogsBySite.set(
+          row.id,
+          res.rows.map((r) => r.payload_json)
+        );
+      })
+    );
 
     const alertsBySite = new Map<string, AlertRecord[]>();
     for (const a of alertsRes.rows) {

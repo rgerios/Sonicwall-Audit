@@ -6,6 +6,7 @@ COPY package.json package-lock.json* ./
 RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
 COPY index.html tsconfig.json vite.config.ts ./
+COPY shared ./shared
 COPY src ./src
 
 RUN npm run build

@@ -1,5 +1,12 @@
 import https from 'node:https';
 import http from 'node:http';
+import {
+  asRecord,
+  formatUptimeSeconds,
+  getTransportAgent,
+  pickNumber,
+  pickString,
+} from './clientUtils.ts';
 import { parseSonicOsJson } from './parsers.ts';
 import type {
   FirewallRule,
@@ -37,47 +44,6 @@ export interface SonicOsAuditResult {
   telemetry: TelemetrySnapshot;
 }
 
-function asRecord(val: unknown): Record<string, unknown> {
-  return val && typeof val === 'object' && !Array.isArray(val)
-    ? (val as Record<string, unknown>)
-    : {};
-}
-
-function pickNumber(obj: Record<string, unknown>, keys: string[]): number | null {
-  for (const k of keys) {
-    const raw = obj[k];
-    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
-    if (typeof raw === 'string') {
-      const cleaned = raw.replace(/[^0-9.\-]/g, '');
-      if (cleaned) {
-        const num = Number(cleaned);
-        if (Number.isFinite(num)) return num;
-      }
-    }
-  }
-  return null;
-}
-
-function pickString(obj: Record<string, unknown>, keys: string[]): string {
-  for (const k of keys) {
-    const raw = obj[k];
-    if (typeof raw === 'string' && raw.trim()) return raw.trim();
-  }
-  return '';
-}
-
-function formatUptimeSeconds(totalSeconds: number): string {
-  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return '-';
-  const days = Math.floor(totalSeconds / 86400);
-  const hours = Math.floor((totalSeconds % 86400) / 3600);
-  const mins = Math.floor((totalSeconds % 3600) / 60);
-  const parts: string[] = [];
-  if (days > 0) parts.push(`${days}d`);
-  parts.push(`${hours}h`);
-  parts.push(`${mins}m`);
-  return parts.join(' ');
-}
-
 function extractArray(data: unknown, candidateKeys: string[]): Array<Record<string, unknown>> {
   if (Array.isArray(data)) {
     return data.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'));
@@ -92,15 +58,15 @@ function extractArray(data: unknown, candidateKeys: string[]): Array<Record<stri
   return [];
 }
 
-function normalizeRateMbps(obj: Record<string, unknown>, direction: 'rx' | 'tx'): number {
+export function normalizeRateMbps(obj: Record<string, unknown>, direction: 'rx' | 'tx'): number {
+  const directionalAlias = direction === 'rx' ? 'ingress_mbps' : 'egress_mbps';
   const mbps = pickNumber(obj, [
     `${direction}_mbps`,
     `${direction}Mbps`,
     `${direction}_rate_mbps`,
-    `ingress_mbps`,
+    directionalAlias,
   ]);
-  if (mbps !== null && direction === 'rx') return Math.max(0, Number(mbps.toFixed(2)));
-  if (mbps !== null && direction === 'tx') return Math.max(0, Number(mbps.toFixed(2)));
+  if (mbps !== null) return Math.max(0, Number(mbps.toFixed(2)));
 
   const kbps = pickNumber(obj, [
     `${direction}_kbps`,
@@ -157,9 +123,7 @@ async function requestSonicOs(
   const url = new URL(path, baseUrl);
   const isHttps = url.protocol === 'https:';
   const transport = isHttps ? https : http;
-  const agent = isHttps
-    ? new https.Agent({ rejectUnauthorized: !options.ignoreTlsErrors })
-    : undefined;
+  const agent = getTransportAgent(isHttps, options.ignoreTlsErrors);
 
   return new Promise((resolve, reject) => {
     const req = transport.request(
