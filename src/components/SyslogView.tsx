@@ -8,8 +8,8 @@ import {
   FileUp,
   Info,
   RefreshCw,
+  RotateCcw,
   Search,
-  Trash2,
 } from 'lucide-react';
 import type { FirewallVendor, SyslogEvent } from '../types.ts';
 import { vendorApiUrl } from '../utils/vendorApi.ts';
@@ -47,10 +47,13 @@ export function SyslogView({
   const [showPasteBox, setShowPasteBox] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [ingesting, setIngesting] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   useEffect(() => {
     setExpandedId(null);
+    setConfirmReset(false);
     setFeedback(null);
   }, [vendor]);
 
@@ -157,9 +160,34 @@ export function SyslogView({
   };
 
   const handleClearLogs = async () => {
-    await fetch(vendorApiUrl(vendor, '/syslogs'), { method: 'DELETE' });
-    onDataChanged();
-    await fetchLogs();
+    setClearing(true);
+    setFeedback(null);
+    try {
+      const res = await fetch(vendorApiUrl(vendor, '/syslogs'), { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setFeedback({
+          type: 'err',
+          text: (data as { error?: string }).error || 'Falha ao resetar syslogs.',
+        });
+        return;
+      }
+      setConfirmReset(false);
+      setExpandedId(null);
+      setEvents([]);
+      setTotal(0);
+      setMatched(0);
+      setFeedback({
+        type: 'ok',
+        text: 'Todos os syslogs recebidos foram limpos e os contadores de uso foram zerados.',
+      });
+      onDataChanged();
+      await fetchLogs(0);
+    } catch {
+      setFeedback({ type: 'err', text: 'Erro de rede ao resetar syslogs.' });
+    } finally {
+      setClearing(false);
+    }
   };
 
   const renderActionLabel = (action: SyslogEvent['action']) => {
@@ -278,16 +306,41 @@ export function SyslogView({
           >
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
-          {total > 0 && (
+          {total > 0 && !confirmReset && (
             <button
               type="button"
-              onClick={() => void handleClearLogs()}
-              className="p-2 text-red-700 bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-red-50"
-              title="Limpar syslogs"
-              aria-label="Limpar todos os syslogs"
+              onClick={() => setConfirmReset(true)}
+              disabled={clearing}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-700 bg-white border border-red-200 rounded-md hover:bg-red-50 cursor-pointer disabled:opacity-50"
+              title="Resetar syslogs e começar do zero"
+              aria-label="Resetar todos os syslogs"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <RotateCcw className="w-3.5 h-3.5" />
+              Resetar Syslogs
             </button>
+          )}
+          {confirmReset && (
+            <div className="inline-flex items-center gap-1.5 bg-red-50 border border-red-200 rounded-md px-2.5 py-1">
+              <span className="text-[11px] font-medium text-red-800">
+                Apagar {total.toLocaleString('pt-BR')} log(s)?
+              </span>
+              <button
+                type="button"
+                onClick={() => void handleClearLogs()}
+                disabled={clearing}
+                className="px-2.5 py-1 text-[11px] font-semibold text-white bg-red-600 rounded hover:bg-red-700 cursor-pointer disabled:opacity-50"
+              >
+                {clearing ? 'Resetando...' : 'Confirmar'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmReset(false)}
+                disabled={clearing}
+                className="px-2 py-1 text-[11px] font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded hover:bg-[var(--fw-bg)] cursor-pointer disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+            </div>
           )}
         </div>
       </div>

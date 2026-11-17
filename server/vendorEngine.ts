@@ -482,6 +482,7 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
 
   async function clearSyslogs(site: FirewallSiteRecord): Promise<void> {
     site.syslogs = [];
+    udpBuffer.delete(site.id);
     const queued = pendingInserts.get(site.id);
     if (queued) {
       pendingInsertCount -= queued.length;
@@ -1982,7 +1983,9 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
       const site = siteFor(req);
       await clearSyslogs(site);
       evaluateSiteAlerts(site);
-      schedulePersist({ policySiteId: site.id });
+      pendingPolicySiteIds.add(site.id);
+      pendingAlertSiteIds.add(site.id);
+      await persistNow();
       res.json({ ok: true, overview: buildOverview(site) });
     })
   );
