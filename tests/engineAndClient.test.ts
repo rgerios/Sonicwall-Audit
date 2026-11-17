@@ -4,6 +4,7 @@ import {
   addEventsToRuntime,
   buildHourlyLogVolume,
   computeWindowRankings,
+  deriveInterfaceThroughput,
   diffPolicies,
   emptyRuntime,
 } from '../server/engineHelpers.ts';
@@ -125,5 +126,48 @@ describe('sonicosClient & engineHelpers', () => {
 
     assert.deepEqual(diff, { added: 1, removed: 1, modified: 1 });
     assert.equal(details.length, 3);
+  });
+
+  it('deriveInterfaceThroughput computes Rx/Tx Mbps from byte deltas when API returns 0', () => {
+    const prevSyncAt = '2026-11-16T23:00:00.000Z';
+    const nowIso = '2026-11-16T23:00:10.000Z'; // 10 seconds later
+    const prevTelemetry = {
+      interfaces: [
+        {
+          name: 'wan1',
+          zone: 'WAN',
+          ip: '200.1.1.1',
+          role: 'wan-primary' as const,
+          linkStatus: 'up' as const,
+          linkSpeedMbps: 100,
+          rxMbps: 0,
+          txMbps: 0,
+          rxBytes: 1_000_000,
+          txBytes: 500_000,
+          rxErrors: 0,
+          txErrors: 0,
+          utilizationPercent: 0,
+        },
+      ],
+      vpns: [],
+      licenses: [],
+    };
+    const nextTelemetry = {
+      interfaces: [
+        {
+          ...prevTelemetry.interfaces[0],
+          // +25,000,000 bytes in 10s = 20 Mbps; +12,500,000 bytes in 10s = 10 Mbps
+          rxBytes: 26_000_000,
+          txBytes: 13_000_000,
+        },
+      ],
+      vpns: [],
+      licenses: [],
+    };
+
+    const derived = deriveInterfaceThroughput(prevTelemetry, prevSyncAt, nextTelemetry, nowIso);
+    assert.equal(derived.interfaces[0].rxMbps, 20);
+    assert.equal(derived.interfaces[0].txMbps, 10);
+    assert.equal(derived.interfaces[0].utilizationPercent, 30);
   });
 });

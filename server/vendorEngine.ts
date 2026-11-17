@@ -19,6 +19,7 @@ import {
   addEventsToRuntime,
   buildHourlyLogVolume,
   computeWindowRankings,
+  deriveInterfaceThroughput,
   diffPolicies,
   emptyRuntime,
   envInt,
@@ -1234,9 +1235,15 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
           passwordEncrypted: nextPasswordEncrypted,
         };
 
+        const nowIso = new Date().toISOString();
         nextRules = audit.rules;
         nextNats = audit.nats;
-        site.telemetry = audit.telemetry;
+        site.telemetry = deriveInterfaceThroughput(
+          site.telemetry,
+          site.appliance.lastSyncAt,
+          audit.telemetry,
+          nowIso
+        );
         site.appliance = {
           model: audit.model,
           serialNumber: audit.serialNumber,
@@ -1249,7 +1256,7 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
           maxConnections: audit.maxConnections,
           haRole: audit.haRole,
           host: `${host}:${port}`,
-          lastSyncAt: new Date().toISOString(),
+          lastSyncAt: nowIso,
           dataSource: 'api',
         };
       } else {
@@ -1278,9 +1285,15 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
           passwordEncrypted: nextPasswordEncrypted,
         };
 
+        const nowIso = new Date().toISOString();
         nextRules = audit.rules;
         nextNats = audit.nats;
-        site.telemetry = audit.telemetry;
+        site.telemetry = deriveInterfaceThroughput(
+          site.telemetry,
+          site.appliance.lastSyncAt,
+          audit.telemetry,
+          nowIso
+        );
         site.appliance = {
           model: audit.model,
           serialNumber: audit.serialNumber,
@@ -1295,7 +1308,7 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
           maxConnections: audit.maxConnections,
           haRole: audit.haRole,
           host: `${host}:${port}`,
-          lastSyncAt: new Date().toISOString(),
+          lastSyncAt: nowIso,
           dataSource: 'api',
         };
       }

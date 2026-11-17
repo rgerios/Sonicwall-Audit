@@ -7,6 +7,7 @@ import type {
   NatPolicy,
   SyncStatus,
   SyslogEvent,
+  TelemetrySnapshot,
 } from './types.ts';
 
 export const HOUR_MS = 60 * 60 * 1000;
@@ -248,4 +249,54 @@ export function diffPolicies<T extends FirewallRule | NatPolicy>(
     }
   }
   return { added, removed, modified };
+}
+
+/**
+ * Quando a API do firewall (ex.: FortiOS /api/v2/monitor/system/interface) retorna apenas
+ * contadores acumulados (rx_bytes/tx_bytes) sem taxa instantânea, calcula Rx/Tx em Mbps
+ * pela variação de bytes entre a coleta anterior e a atual.
+ */
+export function deriveInterfaceThroughput(
+  previousTelemetry: TelemetrySnapshot | undefined,
+  previousSyncAt: string | null | undefined,
+  nextTelemetry: TelemetrySnapshot,
+  nowIso: string
+): TelemetrySnapshot {
+  if (!previousTelemetry?.interfaces?.length || !previousSyncAt) {
+    return nextTelemetry;
+  }
+  const prevMs = Date.parse(previousSyncAt);
+  const nowMs = Date.parse(nowIso);
+  const elapsedSec = (nowMs - prevMs) / 1000;
+  if (!Number.isFinite(elapsedSec) || elapsedSec < 1) {
+    return nextTelemetry;
+  }
+
+  const prevByName = new Map(previousTelemetry.interfaces.map((i) => [i.name, i]));
+  const interfaces = nextTelemetry.interfaces.map((curr) => {
+    if (curr.rxMbps > 0 || curr.txMbps > 0) return curr;
+    const prev = prevByName.get(curr.name);
+    if (!prev) return curr;
+
+    const deltaRx = curr.rxBytes >= prev.rxBytes ? curr.rxBytes - prev.rxBytes : 0;
+    const deltaTx = curr.txBytes >= prev.txBytes ? curr.txBytes - prev.txBytes : 0;
+    const rxMbps = Number(((deltaRx * 8) / (elapsedSec * 1_000_000)).toFixed(2));
+    const txMbps = Number(((deltaTx * 8) / (elapsedSec * 1_000_000)).toFixed(2));
+    const utilizationPercent =
+      curr.linkSpeedMbps > 0
+        ? Number(Math.min(100, ((rxMbps + txMbps) / curr.linkSpeedMbps) * 100).toFixed(1))
+        : 0;
+
+    return {
+      ...curr,
+      rxMbps,
+      txMbps,
+      utilizationPercent,
+    };
+  });
+
+  return {
+    ...nextTelemetry,
+    interfaces,
+  };
 }
