@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
   addEventsToRuntime,
   buildHourlyLogVolume,
+  computeIpConsumption,
   computeWindowRankings,
   deriveInterfaceThroughput,
   diffPolicies,
@@ -169,5 +170,49 @@ describe('sonicosClient & engineHelpers', () => {
     assert.equal(derived.interfaces[0].rxMbps, 20);
     assert.equal(derived.interfaces[0].txMbps, 10);
     assert.equal(derived.interfaces[0].utilizationPercent, 30);
+  });
+
+  it('computeIpConsumption aggregates IP bandwidth, top consumers and destinations', () => {
+    const now = Date.now();
+    const recentIso = new Date(now - 60_000).toISOString();
+    const oldIso = new Date(now - 2 * 60 * 60_000).toISOString();
+    const events: SyslogEvent[] = [
+      makeEvent({
+        id: 'c1',
+        ingestedAt: recentIso,
+        srcIp: '10.20.4.45',
+        dstIp: '172.16.50.10',
+        dstPort: 443,
+        bytesSent: 15_000_000,
+        bytesRcvd: 60_000_000,
+      }),
+      makeEvent({
+        id: 'c2',
+        ingestedAt: recentIso,
+        srcIp: '10.20.4.99',
+        dstIp: '8.8.8.8',
+        dstPort: 53,
+        bytesSent: 1_000,
+        bytesRcvd: 2_000,
+      }),
+      makeEvent({
+        id: 'c3-old',
+        ingestedAt: oldIso,
+        srcIp: '10.20.4.45',
+        dstIp: '172.16.50.10',
+        bytesSent: 999_999_999,
+        bytesRcvd: 999_999_999,
+      }),
+    ];
+
+    const report = computeIpConsumption(events, '10.20.4.45', 15, now);
+    assert.equal(report.eventCount, 1);
+    assert.equal(report.bytesSent, 15_000_000);
+    assert.equal(report.bytesRcvd, 60_000_000);
+    assert.equal(report.totalBytes, 75_000_000);
+    assert.equal(report.topConsumers[0].ip, '10.20.4.45');
+    assert.equal(report.topDestinations[0].ip, '172.16.50.10');
+    assert.equal(report.timeline.length, 12);
+    assert.ok(report.avgMbps > 0);
   });
 });

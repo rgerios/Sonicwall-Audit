@@ -4,6 +4,10 @@ import type {
   FirewallSiteRecord,
   FirewallVendor,
   HourlyLogVolumePoint,
+  IpConsumptionConsumer,
+  IpConsumptionDestination,
+  IpConsumptionReport,
+  IpConsumptionTimelinePoint,
   NatPolicy,
   SyncStatus,
   SyslogEvent,
@@ -298,5 +302,181 @@ export function deriveInterfaceThroughput(
   return {
     ...nextTelemetry,
     interfaces,
+  };
+}
+
+/**
+ * Calcula o consumo de banda (bytes enviados/recebidos e vazão média em Mbps) de um IP
+ * específico (ou dos maiores consumidores quando `ip` está vazio) dentro de uma janela
+ * recente de syslogs.
+ */
+export function computeIpConsumption(
+  events: SyslogEvent[],
+  ipRaw: string,
+  windowMinutesRaw = 15,
+  nowMs = Date.now()
+): IpConsumptionReport {
+  const ip = ipRaw.trim();
+  const windowMinutes = Math.max(1, Math.min(1440, Math.floor(windowMinutesRaw) || 15));
+  const windowMs = windowMinutes * 60 * 1000;
+  const cutoffMs = nowMs - windowMs;
+  const windowSec = windowMinutes * 60;
+
+  const consumerMap = new Map<
+    string,
+    { bytesSent: number; bytesRcvd: number; events: number }
+  >();
+
+  let totalBytesSent = 0;
+  let totalBytesRcvd = 0;
+  let eventCount = 0;
+  let allowCount = 0;
+  let blockedCount = 0;
+  let lastSeenAt: string | null = null;
+
+  const bucketCount = 12;
+  const bucketMs = windowMs / bucketCount;
+  const buckets = Array.from({ length: bucketCount }, () => ({
+    bytesSent: 0,
+    bytesRcvd: 0,
+    events: 0,
+  }));
+
+  const destMap = new Map<
+    string,
+    { ip: string; port: number | null; protocol: string; bytesSent: number; bytesRcvd: number; events: number }
+  >();
+  const serviceMap = new Map<string, { totalBytes: number; events: number }>();
+
+  for (const ev of events) {
+    const evMs = resolveEventTimeMs(ev);
+    if (evMs < cutoffMs || evMs > nowMs + 5 * 60 * 1000) continue;
+
+    const sent = Math.max(0, Number(ev.bytesSent) || 0);
+    const rcvd = Math.max(0, Number(ev.bytesRcvd) || 0);
+
+    if (ev.srcIp && ev.srcIp !== '-') {
+      const c = consumerMap.get(ev.srcIp) || { bytesSent: 0, bytesRcvd: 0, events: 0 };
+      c.bytesSent += sent;
+      c.bytesRcvd += rcvd;
+      c.events += 1;
+      consumerMap.set(ev.srcIp, c);
+    }
+
+    if (!ip) continue;
+
+    const isSrc = ev.srcIp === ip;
+    const isDst = ev.dstIp === ip;
+    if (!isSrc && !isDst) continue;
+
+    // Se o IP consultado foi o destino do pacote, o que o firewall registrou como rcvd é o que
+    // esse IP enviou, e o sent é o que esse IP recebeu.
+    const ipSent = isSrc ? sent : rcvd;
+    const ipRcvd = isSrc ? rcvd : sent;
+    const peerIp = isSrc ? ev.dstIp : ev.srcIp;
+    const peerPort = isSrc ? ev.dstPort : ev.srcPort;
+
+    totalBytesSent += ipSent;
+    totalBytesRcvd += ipRcvd;
+    eventCount += 1;
+    if (ev.action === 'allow') allowCount += 1;
+    else if (isBlockedAction(ev.action)) blockedCount += 1;
+
+    const evIso = ev.ingestedAt || new Date(evMs).toISOString();
+    if (!lastSeenAt || evIso > lastSeenAt) lastSeenAt = evIso;
+
+    const idx = Math.min(
+      bucketCount - 1,
+      Math.max(0, Math.floor((evMs - cutoffMs) / bucketMs))
+    );
+    buckets[idx].bytesSent += ipSent;
+    buckets[idx].bytesRcvd += ipRcvd;
+    buckets[idx].events += 1;
+
+    if (peerIp && peerIp !== '-') {
+      const dKey = `${peerIp}:${peerPort ?? '-'}:${ev.protocol}`;
+      const d = destMap.get(dKey) || {
+        ip: peerIp,
+        port: peerPort,
+        protocol: ev.protocol,
+        bytesSent: 0,
+        bytesRcvd: 0,
+        events: 0,
+      };
+      d.bytesSent += ipSent;
+      d.bytesRcvd += ipRcvd;
+      d.events += 1;
+      destMap.set(dKey, d);
+    }
+
+    const svcName = ev.appName || (peerPort !== null ? `${ev.protocol}/${peerPort}` : ev.protocol || 'other');
+    const svc = serviceMap.get(svcName) || { totalBytes: 0, events: 0 };
+    svc.totalBytes += ipSent + ipRcvd;
+    svc.events += 1;
+    serviceMap.set(svcName, svc);
+  }
+
+  const bucketSec = bucketMs / 1000;
+  const timeline: IpConsumptionTimelinePoint[] = buckets.map((b, idx) => {
+    const startMs = cutoffMs + idx * bucketMs;
+    const d = new Date(startMs);
+    const label = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    const total = b.bytesSent + b.bytesRcvd;
+    return {
+      bucketLabel: label,
+      bytesSent: b.bytesSent,
+      bytesRcvd: b.bytesRcvd,
+      mbps: bucketSec > 0 ? Number(((total * 8) / (bucketSec * 1_000_000)).toFixed(2)) : 0,
+      events: b.events,
+    };
+  });
+
+  const topDestinations: IpConsumptionDestination[] = Array.from(destMap.values())
+    .map((d) => ({
+      ...d,
+      totalBytes: d.bytesSent + d.bytesRcvd,
+    }))
+    .sort((a, b) => b.totalBytes - a.totalBytes || b.events - a.events)
+    .slice(0, 8);
+
+  const topServices = Array.from(serviceMap.entries())
+    .map(([service, v]) => ({ service, totalBytes: v.totalBytes, events: v.events }))
+    .sort((a, b) => b.totalBytes - a.totalBytes || b.events - a.events)
+    .slice(0, 6);
+
+  const topConsumers: IpConsumptionConsumer[] = Array.from(consumerMap.entries())
+    .map(([consumerIp, c]) => {
+      const total = c.bytesSent + c.bytesRcvd;
+      return {
+        ip: consumerIp,
+        totalBytes: total,
+        bytesSent: c.bytesSent,
+        bytesRcvd: c.bytesRcvd,
+        avgMbps: Number(((total * 8) / (windowSec * 1_000_000)).toFixed(2)),
+        events: c.events,
+      };
+    })
+    .sort((a, b) => b.totalBytes - a.totalBytes || b.events - a.events)
+    .slice(0, 10);
+
+  const totalBytes = totalBytesSent + totalBytesRcvd;
+
+  return {
+    ip,
+    windowMinutes,
+    totalBytes,
+    bytesSent: totalBytesSent,
+    bytesRcvd: totalBytesRcvd,
+    avgMbps: Number(((totalBytes * 8) / (windowSec * 1_000_000)).toFixed(2)),
+    sentMbps: Number(((totalBytesSent * 8) / (windowSec * 1_000_000)).toFixed(2)),
+    rcvdMbps: Number(((totalBytesRcvd * 8) / (windowSec * 1_000_000)).toFixed(2)),
+    eventCount,
+    allowCount,
+    blockedCount,
+    lastSeenAt,
+    timeline,
+    topDestinations,
+    topServices,
+    topConsumers,
   };
 }

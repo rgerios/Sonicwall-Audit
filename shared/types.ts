@@ -427,3 +427,49 @@ export interface AiChatMessage {
   provider?: AiProviderType;
   model?: string;
 }
+
+export interface IpConsumptionTimelinePoint {
+  bucketLabel: string;
+  bytesSent: number;
+  bytesRcvd: number;
+  mbps: number;
+  events: number;
+}
+
+export interface IpConsumptionDestination {
+  ip: string;
+  port: number | null;
+  protocol: string;
+  totalBytes: number;
+  bytesSent: number;
+  bytesRcvd: number;
+  events: number;
+}
+
+export interface IpConsumptionConsumer {
+  ip: string;
+  totalBytes: number;
+  bytesSent: number;
+  bytesRcvd: number;
+  avgMbps: number;
+  events: number;
+}
+
+export interface IpConsumptionReport {
+  ip: string;
+  windowMinutes: number;
+  totalBytes: number;
+  bytesSent: number;
+  bytesRcvd: number;
+  avgMbps: number;
+  sentMbps: number;
+  rcvdMbps: number;
+  eventCount: number;
+  allowCount: number;
+  blockedCount: number;
+  lastSeenAt: string | null;
+  timeline: IpConsumptionTimelinePoint[];
+  topDestinations: IpConsumptionDestination[];
+  topServices: Array<{ service: string; totalBytes: number; events: number }>;
+  topConsumers: IpConsumptionConsumer[];
+}

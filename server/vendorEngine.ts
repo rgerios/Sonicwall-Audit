@@ -18,6 +18,7 @@ import { buildSyslogSearchText } from './database.ts';
 import {
   addEventsToRuntime,
   buildHourlyLogVolume,
+  computeIpConsumption,
   computeWindowRankings,
   deriveInterfaceThroughput,
   diffPolicies,
@@ -1903,6 +1904,37 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
         offset,
         limit,
       });
+    })
+  );
+
+  router.get(
+    '/syslogs/ip-consumption',
+    asyncRoute(async (req, res) => {
+      const site = siteFor(req);
+      const ip = typeof req.query.ip === 'string' ? req.query.ip.trim() : '';
+      const windowMinutes = Math.max(
+        1,
+        Math.min(1440, Math.floor(Number(req.query.windowMinutes || 15)) || 15)
+      );
+      const nowMs = Date.now();
+      const cutoffIso = new Date(nowMs - windowMinutes * 60 * 1000).toISOString();
+
+      let events = site.syslogs;
+      if (usePg) {
+        await flushPendingInserts();
+        const oldestInMemory =
+          site.syslogs.length > 0 ? site.syslogs[site.syslogs.length - 1]?.ingestedAt : null;
+        if (
+          ip ||
+          (oldestInMemory && oldestInMemory > cutoffIso) ||
+          site.syslogs.length >= MEMORY_WINDOW
+        ) {
+          events = await pgStore.querySyslogsSince(site.id, cutoffIso, ip || undefined, 50_000);
+        }
+      }
+
+      const report = computeIpConsumption(events, ip, windowMinutes, nowMs);
+      res.json(report);
     })
   );
 

@@ -14,6 +14,7 @@ import {
 import type { FirewallVendor, SyslogEvent } from '../types.ts';
 import { vendorApiUrl } from '../utils/vendorApi.ts';
 import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
+import { IpConsumptionPanel } from './IpConsumptionPanel.tsx';
 
 interface SyslogViewProps {
   vendor: FirewallVendor;
@@ -190,6 +191,16 @@ export function SyslogView({
 
   return (
     <div className="space-y-4">
+      <IpConsumptionPanel
+        vendor={vendor}
+        refreshToken={refreshToken}
+        onFilterSyslogsByIp={(ip) => {
+          setQuery(ip);
+          setActionFilter('all');
+          setSeverityFilter('all');
+        }}
+      />
+
       <div className="bg-white border border-[var(--fw-border)] rounded-lg p-4 flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3 flex-1 min-w-[260px]">
           <div className="relative flex-1 min-w-[220px] max-w-md">

@@ -791,6 +791,28 @@ export class PostgresStore {
     };
   }
 
+  async querySyslogsSince(
+    siteId: string,
+    sinceIso: string,
+    ip?: string,
+    limit = 50_000
+  ): Promise<SyslogEvent[]> {
+    const pool = this.getPool();
+    const where: string[] = ['site_id = $1', 'event_at >= $2'];
+    const params: unknown[] = [siteId, sinceIso];
+    if (ip && ip.trim()) {
+      const escaped = ip.trim().toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
+      params.push(`%${escaped}%`);
+      where.push(`search_text LIKE $${params.length}`);
+    }
+    params.push(limit);
+    const res = await pool.query<{ payload_json: SyslogEvent }>(
+      `SELECT payload_json FROM syslogs WHERE ${where.join(' AND ')} ORDER BY event_at DESC LIMIT $${params.length}`,
+      params
+    );
+    return res.rows.map((r) => r.payload_json);
+  }
+
   async loadSyslogStats(siteId: string): Promise<SyslogStats> {
     const pool = this.getPool();
     const totals = await pool.query<{
