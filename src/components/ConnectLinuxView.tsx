@@ -26,6 +26,7 @@ import type {
 } from '../types.ts';
 import { vendorApiUrl } from '../utils/vendorApi.ts';
 import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
+import { AppLogsPanel } from './AppLogsPanel.tsx';
 
 interface ConnectLinuxViewProps {
   vendor: FirewallVendor;
@@ -1418,6 +1419,8 @@ export function ConnectLinuxView({
           </pre>
         </div>
       </div>
+
+      <AppLogsPanel vendor={vendor} />
     </div>
   );
 }

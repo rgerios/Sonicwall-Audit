@@ -473,3 +473,15 @@ export interface IpConsumptionReport {
   topServices: Array<{ service: string; totalBytes: number; events: number }>;
   topConsumers: IpConsumptionConsumer[];
 }
+
+export type AppLogLevel = 'info' | 'warn' | 'error';
+
+export interface AppLogEntry {
+  id: string;
+  ts: string;
+  level: AppLogLevel;
+  vendor: FirewallVendor | 'system';
+  scope: string;
+  message: string;
+  detail?: string;
+}

@@ -12,6 +12,7 @@ import {
   evaluateOverviewAlerts,
   normalizeAlertSettings,
 } from './alertsEngine.ts';
+import { appLog } from './appLogger.ts';
 import type { AuthManager } from './authManager.ts';
 import type { PostgresStore, SyslogStats } from './database.ts';
 import { buildSyslogSearchText } from './database.ts';
@@ -1348,11 +1349,23 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
       await recordMetricSample(site);
       evaluateSiteAlerts(site);
       schedulePersist({ policySiteId: site.id });
+      appLog.info(
+        vendor,
+        'sync',
+        `Sincronização concluída: ${site.name} (${host}:${port})`,
+        `${site.rules.length} regra(s), ${site.nats.length} NAT(s), modelo ${site.appliance.model}`
+      );
 
       return { rulesCount: site.rules.length, natsCount: site.nats.length };
     } catch (err) {
       site.lastSyncError = err instanceof Error ? err.message : 'Erro desconhecido';
       site.consecutiveSyncFailures += 1;
+      appLog.error(
+        vendor,
+        'sync',
+        `Falha ao sincronizar ${site.name} (${site.connection.host || 'sem host'}:${site.connection.port})`,
+        site.lastSyncError
+      );
       schedulePersist();
       throw err;
     } finally {
@@ -1409,7 +1422,8 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
     (handler: (req: express.Request, res: express.Response) => Promise<void>) =>
     (req: express.Request, res: express.Response) => {
       handler(req, res).catch((err) => {
-        console.error(`[${vendor}] Erro em ${req.method} ${req.path}:`, err);
+        const msg = err instanceof Error ? err.message : String(err);
+        appLog.error(vendor, 'api', `Erro em ${req.method} ${req.path}`, msg);
         if (!res.headersSent) {
           res.status(500).json({ error: 'Erro interno ao processar a requisição.' });
         }
@@ -2329,10 +2343,29 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
         });
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : 'Falha ao consultar o provedor de IA.';
+        appLog.error(vendor, 'ai', `Falha na consulta IA (${settings.provider}/${settings.model})`, errMsg);
         res.status(502).json({ error: errMsg });
       }
     })
   );
+
+  // --- Logs da aplicação (diagnóstico) ---------------------------------------
+
+  router.get('/app-logs', (req, res) => {
+    const levelRaw = typeof req.query.level === 'string' ? req.query.level : 'all';
+    const level =
+      levelRaw === 'info' || levelRaw === 'warn' || levelRaw === 'error' ? levelRaw : 'all';
+    const search = typeof req.query.search === 'string' ? req.query.search : '';
+    const limit = Number(req.query.limit || 150);
+    res.json({
+      logs: appLog.list({ vendor, level, search, limit }),
+    });
+  });
+
+  router.delete('/app-logs', (_req, res) => {
+    appLog.clear(vendor);
+    res.json({ ok: true });
+  });
 
   // ---------------------------------------------------------------------------
   // Ciclo de vida
@@ -2363,16 +2396,20 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
     if (udp.enabled) {
       try {
         await udpReceiver.start(udp.port, udp.bindAddress);
-        console.log(`[${vendor}] Receptor de syslog UDP ativo em ${udp.bindAddress}:${udp.port}`);
+        appLog.info(vendor, 'udp', `Receptor de syslog UDP ativo em ${udp.bindAddress}:${udp.port}`);
       } catch (err) {
-        console.error(
-          `[${vendor}] Não foi possível iniciar o receptor UDP na porta ${udp.port}:`,
-          err instanceof Error ? err.message : err
+        appLog.error(
+          vendor,
+          'udp',
+          `Não foi possível iniciar o receptor UDP na porta ${udp.port}`,
+          err instanceof Error ? err.message : String(err)
         );
       }
     }
-    console.log(
-      `[${vendor}] ${vendorLabel}: ${Object.keys(store.sites).length} firewall(s), janela em memória de ${MEMORY_WINDOW.toLocaleString('pt-BR')} eventos por firewall.`
+    appLog.info(
+      vendor,
+      'boot',
+      `${vendorLabel} iniciado: ${Object.keys(store.sites).length} firewall(s), janela de ${MEMORY_WINDOW.toLocaleString('pt-BR')} eventos`
     );
   }
 
