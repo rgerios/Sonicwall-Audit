@@ -288,10 +288,16 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
       }
     }
 
-    if (ifaceStatsRes.status >= 400) {
-      const altIfaceStats = await safeGet('/api/sonicos/reporting/interfaces/ipv4');
-      if (altIfaceStats.status < 400) {
-        ifaceStatsRes = altIfaceStats;
+    if (ifaceStatsRes.status >= 400 || extractArray(ifaceStatsRes.data, ['interfaces', 'interface', 'interface_statistics']).length === 0) {
+      for (const altEp of [
+        '/api/sonicos/reporting/interfaces/ipv4',
+        '/api/sonicos/reporting/interface-statistics',
+      ]) {
+        const alt = await safeGet(altEp);
+        if (alt.status < 400 && extractArray(alt.data, ['interfaces', 'interface', 'interface_statistics']).length > 0) {
+          ifaceStatsRes = alt;
+          break;
+        }
       }
     }
 
@@ -376,12 +382,14 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
         'utilization',
         'average',
         'core_utilization',
+        'data_plane',
+        'control_plane',
       ]) ?? pickNumber(sysObj, ['cpu_utilization', 'cpu_percent', 'cpu']);
     if (cpuPercent === null) {
-      const cores = extractArray(cpuRes.data, ['cores', 'core_utilization', 'cpu']);
+      const cores = extractArray(cpuRes.data, ['cores', 'core', 'multi_core', 'core_utilization', 'cpu']);
       if (cores.length > 0) {
         const vals = cores
-          .map((c) => pickNumber(c, ['utilization', 'percent', 'usage', 'load', 'value']))
+          .map((c) => pickNumber(c, ['utilization', 'percent', 'usage', 'load', 'value', 'cpu_utilization']))
           .filter((v): v is number => v !== null);
         if (vals.length > 0) {
           cpuPercent = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
@@ -400,12 +408,15 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
         'used_percent',
         'memory_utilization',
         'ram_utilization',
+        'ram_utilization_percent',
+        'current_memory_utilization',
+        'current_ram_utilization',
         'utilization',
         'percent',
       ]) ?? pickNumber(sysObj, ['memory_utilization', 'ram_utilization', 'memory_percent']);
     if (memoryPercent === null) {
-      const used = pickNumber(memInner, ['used', 'used_bytes', 'used_mb']);
-      const total = pickNumber(memInner, ['total', 'total_bytes', 'total_mb']);
+      const used = pickNumber(memInner, ['used', 'used_bytes', 'used_mb', 'used_ram']);
+      const total = pickNumber(memInner, ['total', 'total_bytes', 'total_mb', 'total_ram']);
       if (used !== null && total !== null && total > 0) {
         memoryPercent = Math.round((used / total) * 100);
       }
@@ -416,7 +427,12 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
 
     // Active / Max connections
     const connObj = asRecord(connRes.data);
-    const connInner = Object.keys(asRecord(connObj.connections)).length > 0 ? asRecord(connObj.connections) : connObj;
+    const connInner =
+      Object.keys(asRecord(connObj.connections)).length > 0
+        ? asRecord(connObj.connections)
+        : Object.keys(asRecord(connObj.connection_cache)).length > 0
+          ? asRecord(connObj.connection_cache)
+          : connObj;
     const activeConnections =
       pickNumber(connInner, [
         'active_connections',
@@ -424,35 +440,55 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
         'active',
         'current',
         'count',
+        'total',
       ]) ?? pickNumber(sysObj, ['active_connections', 'current_connections']);
     const maxConnections =
       pickNumber(connInner, [
         'max_connections',
         'maximum_connections',
+        'peak_connections',
         'max',
         'limit',
       ]) ?? pickNumber(sysObj, ['max_connections', 'maximum_connections']);
 
     // Interfaces & link consumption
     const ifaceConfigs = extractArray(ifaceCfgRes.data, ['interfaces', 'interface', 'ipv4']);
-    const ifaceStats = extractArray(ifaceStatsRes.data, ['interfaces', 'interface', 'interface_statistics']);
+    const ifaceStats = extractArray(ifaceStatsRes.data, [
+      'interfaces',
+      'interface',
+      'interface_statistics',
+      'interface_traffic_statistics',
+    ]);
 
     const ifaceConfigMap = new Map<string, Record<string, unknown>>();
     for (const cfg of ifaceConfigs) {
       const ipv4 = asRecord(cfg.ipv4);
-      const name =
-        pickString(cfg, ['name', 'interface', 'id']) ||
-        pickString(ipv4, ['name', 'interface']);
+      const innerIface = asRecord(cfg.interface);
+      const flatCfg = {
+        ...cfg,
+        ...(Object.keys(innerIface).length > 0 ? innerIface : {}),
+        ...(Object.keys(ipv4).length > 0 ? ipv4 : {}),
+      };
+      const name = pickString(flatCfg, ['name', 'interface_name', 'interface', 'id']);
       if (name) {
-        ifaceConfigMap.set(name.toUpperCase(), Object.keys(ipv4).length > 0 ? { ...cfg, ...ipv4 } : cfg);
+        ifaceConfigMap.set(name.toUpperCase(), flatCfg);
       }
     }
 
     const ifaceStatMap = new Map<string, Record<string, unknown>>();
     for (const st of ifaceStats) {
-      const name = pickString(st, ['name', 'interface', 'id']);
+      const innerIface = asRecord(st.interface);
+      const innerStats = asRecord(st.statistics);
+      const innerTraffic = asRecord(st.traffic);
+      const flatSt = {
+        ...st,
+        ...(Object.keys(innerIface).length > 0 ? innerIface : {}),
+        ...(Object.keys(innerStats).length > 0 ? innerStats : {}),
+        ...(Object.keys(innerTraffic).length > 0 ? innerTraffic : {}),
+      };
+      const name = pickString(flatSt, ['name', 'interface_name', 'interface', 'id']);
       if (name) {
-        ifaceStatMap.set(name.toUpperCase(), st);
+        ifaceStatMap.set(name.toUpperCase(), flatSt);
       }
     }
 
@@ -488,8 +524,16 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
       );
       const rxMbps = normalizeRateMbps(merged, 'rx');
       const txMbps = normalizeRateMbps(merged, 'tx');
-      const rxBytes = pickNumber(merged, ['rx_bytes', 'in_bytes', 'rx_octets']) ?? 0;
-      const txBytes = pickNumber(merged, ['tx_bytes', 'out_bytes', 'tx_octets']) ?? 0;
+      const rxBytes =
+        pickNumber(merged, ['rx_bytes', 'in_bytes', 'rx_octets', 'in_octets']) ??
+        (pickNumber(merged, ['rx_kilobytes', 'rx_kbytes']) !== null
+          ? (pickNumber(merged, ['rx_kilobytes', 'rx_kbytes']) ?? 0) * 1024
+          : 0);
+      const txBytes =
+        pickNumber(merged, ['tx_bytes', 'out_bytes', 'tx_octets', 'out_octets']) ??
+        (pickNumber(merged, ['tx_kilobytes', 'tx_kbytes']) !== null
+          ? (pickNumber(merged, ['tx_kilobytes', 'tx_kbytes']) ?? 0) * 1024
+          : 0);
       const rxErrors = pickNumber(merged, ['rx_errors', 'in_errors']) ?? 0;
       const txErrors = pickNumber(merged, ['tx_errors', 'out_errors']) ?? 0;
 
@@ -592,7 +636,14 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
       return { service, status, expiresAt };
     });
 
-    const diagSummary = `rules=${rulesRes.status}(${rules.length}), nats=${natsRes.status}(${nats.length}), ver=${versionRes.status}, cpu=${cpuRes.status}(${cpuPercent ?? '-'}%), mem=${memRes.status}(${memoryPercent ?? '-'}%), ifaces=${ifaceCfgRes.status}/${ifaceStatsRes.status}(${interfaces.length}), vpn=${vpnRes.status}(${vpns.length})`;
+    const missingParts: string[] = [];
+    if (cpuPercent === null) missingParts.push(`cpuKeys=${JSON.stringify(Object.keys(cpuObj).slice(0, 6))}`);
+    if (memoryPercent === null) missingParts.push(`memKeys=${JSON.stringify(Object.keys(memObj).slice(0, 6))}`);
+    if (activeConnections === null) missingParts.push(`connKeys=${JSON.stringify(Object.keys(connObj).slice(0, 6))}`);
+    if (ifaceStats.length === 0) {
+      missingParts.push(`ifaceStatKeys=${JSON.stringify(Object.keys(asRecord(ifaceStatsRes.data)).slice(0, 6))}`);
+    }
+    const diagSummary = `rules=${rulesRes.status}(${rules.length}), nats=${natsRes.status}(${nats.length}), ver=${versionRes.status}, cpu=${cpuRes.status}(${cpuPercent ?? '-'}%), mem=${memRes.status}(${memoryPercent ?? '-'}%), conn=${connRes.status}(${activeConnections ?? '-'}), ifaces=${ifaceCfgRes.status}/${ifaceStatsRes.status}(${interfaces.length}, stats=${ifaceStats.length}), vpn=${vpnRes.status}(${vpns.length})${missingParts.length ? ` | ${missingParts.join(' ')}` : ''}`;
     if (rules.length === 0 && interfaces.length === 0) {
       appLog.warn(
         'sonicwall',
