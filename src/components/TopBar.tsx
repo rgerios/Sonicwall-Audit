@@ -1,5 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
-import { Bell, Database, Search, Settings2, Upload, X } from 'lucide-react';
+import {
+  Bell,
+  BellOff,
+  BellRing,
+  Database,
+  Moon,
+  Search,
+  Settings2,
+  Sun,
+  Upload,
+  X,
+} from 'lucide-react';
 import type { ActiveSection, AuditOverview, FirewallVendor } from '../types.ts';
 import {
   DISMISSED_ALERTS_EVENT,
@@ -20,6 +31,10 @@ interface TopBarProps {
   onOpenAlertConfig: () => void;
   onInvestigateSyslog: (query: string) => void;
   loadingSample: boolean;
+  toastPopupsEnabled: boolean;
+  onToggleToastPopups: () => void;
+  colorMode: 'light' | 'dark';
+  onToggleColorMode: () => void;
 }
 
 export function TopBar({
@@ -32,6 +47,10 @@ export function TopBar({
   onOpenAlertConfig,
   onInvestigateSyslog,
   loadingSample,
+  toastPopupsEnabled,
+  onToggleToastPopups,
+  colorMode,
+  onToggleColorMode,
 }: TopBarProps) {
   const theme = VENDOR_THEMES[vendor];
   const [popoverOpen, setPopoverOpen] = useState(false);
@@ -110,6 +129,31 @@ export function TopBar({
       </div>
 
       <div className="flex items-center gap-2.5 shrink-0">
+        <button
+          type="button"
+          onClick={onToggleToastPopups}
+          aria-pressed={toastPopupsEnabled}
+          title={
+            toastPopupsEnabled
+              ? 'Popups laterais de alerta ativados (clique para silenciar)'
+              : 'Popups laterais desativados (alertas continuam no sino)'
+          }
+          className={`inline-flex items-center gap-1.5 px-2.5 py-2 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            toastPopupsEnabled
+              ? 'bg-[var(--fw-bg)] text-[var(--fw-text-body)] border-[var(--fw-border-strong)] hover:bg-[var(--fw-surface)]'
+              : 'bg-[var(--fw-surface-alt)] text-[var(--fw-text-muted)] border-[var(--fw-border)] hover:text-[var(--fw-heading)]'
+          }`}
+        >
+          {toastPopupsEnabled ? (
+            <BellRing className="w-3.5 h-3.5 text-[var(--fw-accent)]" aria-hidden="true" />
+          ) : (
+            <BellOff className="w-3.5 h-3.5" aria-hidden="true" />
+          )}
+          <span className="hidden lg:inline">
+            {toastPopupsEnabled ? 'Popups ON' : 'Popups OFF'}
+          </span>
+        </button>
+
         <div className="relative" ref={popoverRef}>
           <button
             type="button"
@@ -256,6 +300,20 @@ export function TopBar({
         >
           <Upload className="w-3.5 h-3.5" aria-hidden="true" />
           Conectar ou Importar
+        </button>
+
+        <button
+          type="button"
+          onClick={onToggleColorMode}
+          aria-label={colorMode === 'dark' ? 'Alternar para modo claro' : 'Alternar para modo escuro'}
+          title={colorMode === 'dark' ? 'Modo Claro' : 'Modo Escuro'}
+          className="p-2 text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] transition-colors shrink-0 cursor-pointer"
+        >
+          {colorMode === 'dark' ? (
+            <Sun className="w-4 h-4 text-amber-400" aria-hidden="true" />
+          ) : (
+            <Moon className="w-4 h-4" aria-hidden="true" />
+          )}
         </button>
       </div>
     </header>

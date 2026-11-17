@@ -48,6 +48,8 @@ function ViewFallback() {
 }
 
 const VENDOR_STORAGE_KEY = 'fwaudit:active-vendor';
+const COLOR_MODE_STORAGE_KEY = 'fwaudit:color-mode';
+const TOAST_POPUPS_STORAGE_KEY = 'fwaudit:toast-popups';
 
 function readInitialVendor(): FirewallVendor {
   try {
@@ -58,8 +60,26 @@ function readInitialVendor(): FirewallVendor {
   }
 }
 
+function readInitialColorMode(): 'light' | 'dark' {
+  try {
+    return localStorage.getItem(COLOR_MODE_STORAGE_KEY) === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+function readInitialToastPopups(): boolean {
+  try {
+    return localStorage.getItem(TOAST_POPUPS_STORAGE_KEY) !== 'false';
+  } catch {
+    return true;
+  }
+}
+
 export default function App() {
   const [activeVendor, setActiveVendor] = useState<FirewallVendor>(readInitialVendor);
+  const [colorMode, setColorMode] = useState<'light' | 'dark'>(readInitialColorMode);
+  const [toastPopupsEnabled, setToastPopupsEnabled] = useState<boolean>(readInitialToastPopups);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [authChecking, setAuthChecking] = useState(true);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
@@ -81,6 +101,23 @@ export default function App() {
       // ignore storage quota errors
     }
   }, [activeVendor]);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', colorMode);
+    try {
+      localStorage.setItem(COLOR_MODE_STORAGE_KEY, colorMode);
+    } catch {
+      // ignore storage quota errors
+    }
+  }, [colorMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(TOAST_POPUPS_STORAGE_KEY, String(toastPopupsEnabled));
+    } catch {
+      // ignore storage quota errors
+    }
+  }, [toastPopupsEnabled]);
 
   const fetchAuthStatus = useCallback(async () => {
     try {
@@ -270,6 +307,10 @@ export default function App() {
           onOpenAlertConfig={handleOpenAlertConfig}
           onInvestigateSyslog={handleInvestigateSyslog}
           loadingSample={loadingSample}
+          toastPopupsEnabled={toastPopupsEnabled}
+          onToggleToastPopups={() => setToastPopupsEnabled((v) => !v)}
+          colorMode={colorMode}
+          onToggleColorMode={() => setColorMode((m) => (m === 'dark' ? 'light' : 'dark'))}
         />
 
         <main className="flex-1 p-6 max-w-[1440px] w-full mx-auto">
@@ -365,13 +406,15 @@ export default function App() {
         </Suspense>
       )}
 
-      <NotificationToastStack
-        vendor={activeVendor}
-        overview={overview}
-        onViewAlerts={handleOpenAlertConfig}
-        onInvestigateSyslog={handleInvestigateSyslog}
-        onAnalyzeWithAi={handleAnalyzeEventWithAi}
-      />
+      {toastPopupsEnabled && (
+        <NotificationToastStack
+          vendor={activeVendor}
+          overview={overview}
+          onViewAlerts={handleOpenAlertConfig}
+          onInvestigateSyslog={handleInvestigateSyslog}
+          onAnalyzeWithAi={handleAnalyzeEventWithAi}
+        />
+      )}
     </div>
   );
 }

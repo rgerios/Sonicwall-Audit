@@ -11,8 +11,9 @@ import {
 } from 'lucide-react';
 import {
   Bar,
-  BarChart,
   CartesianGrid,
+  ComposedChart,
+  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -55,6 +56,7 @@ export function IpConsumptionPanel({
   const [ipInput, setIpInput] = useState('');
   const [activeIp, setActiveIp] = useState('');
   const [windowMinutes, setWindowMinutes] = useState(15);
+  const [chartMode, setChartMode] = useState<'combo' | 'bar' | 'line'>('combo');
   const [report, setReport] = useState<IpConsumptionReport | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -277,21 +279,70 @@ export function IpConsumptionPanel({
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 <div className="lg:col-span-2 p-3.5 rounded-md border border-[var(--fw-border)] bg-white">
-                  <div className="text-xs font-semibold text-[var(--fw-heading)] mb-2">
-                    Vazão ao longo da janela (Mbps) — {activeIp}
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <div className="text-xs font-semibold text-[var(--fw-heading)]">
+                      Vazão ao longo da janela (Mbps) — {activeIp}
+                    </div>
+                    <div className="inline-flex items-center gap-0.5 bg-[var(--fw-surface-alt)] p-0.5 rounded">
+                      {(
+                        [
+                          { id: 'combo', label: 'Barras + Linha' },
+                          { id: 'bar', label: 'Barras' },
+                          { id: 'line', label: 'Linha' },
+                        ] as const
+                      ).map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => setChartMode(m.id)}
+                          className={`px-2 py-0.5 text-[10px] font-medium rounded transition-colors cursor-pointer ${
+                            chartMode === m.id
+                              ? 'bg-white text-[var(--fw-heading)] shadow-xs'
+                              : 'text-[var(--fw-text-body)] hover:text-[var(--fw-heading)]'
+                          }`}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                   <div className="h-44">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={report.timeline}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                        <XAxis dataKey="bucketLabel" tick={{ fontSize: 10 }} />
-                        <YAxis tick={{ fontSize: 10 }} width={36} />
+                      <ComposedChart data={report.timeline}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="var(--fw-border)" />
+                        <XAxis dataKey="bucketLabel" tick={{ fontSize: 10, fill: 'var(--fw-text-muted)' }} />
+                        <YAxis tick={{ fontSize: 10, fill: 'var(--fw-text-muted)' }} width={36} />
                         <Tooltip
-                          formatter={(val) => [`${Number(val ?? 0).toFixed(2)} Mbps`, 'Vazão']}
+                          contentStyle={{
+                            backgroundColor: 'var(--fw-surface)',
+                            borderColor: 'var(--fw-border-strong)',
+                            color: 'var(--fw-heading)',
+                            fontSize: '12px',
+                          }}
+                          formatter={(val, name) => [`${Number(val ?? 0).toFixed(2)} Mbps`, String(name)]}
                           labelFormatter={(label) => `Horário: ${label}`}
                         />
-                        <Bar dataKey="mbps" fill="var(--fw-accent)" radius={[3, 3, 0, 0]} />
-                      </BarChart>
+                        {(chartMode === 'combo' || chartMode === 'bar') && (
+                          <Bar
+                            dataKey="mbps"
+                            name="Vazão (Barras)"
+                            fill="var(--fw-accent)"
+                            fillOpacity={chartMode === 'combo' ? 0.65 : 0.9}
+                            radius={[3, 3, 0, 0]}
+                          />
+                        )}
+                        {(chartMode === 'combo' || chartMode === 'line') && (
+                          <Line
+                            type="monotone"
+                            dataKey="mbps"
+                            name="Tendência (Linha)"
+                            stroke="var(--fw-accent-mid)"
+                            strokeWidth={2.2}
+                            dot={{ r: 3, fill: 'var(--fw-accent-mid)' }}
+                            activeDot={{ r: 5 }}
+                          />
+                        )}
+                      </ComposedChart>
                     </ResponsiveContainer>
                   </div>
                 </div>

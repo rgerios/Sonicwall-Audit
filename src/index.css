@@ -55,6 +55,113 @@
   --fw-terminal-text: #FCECEC;
 }
 
+[data-theme="dark"],
+[data-theme="dark"][data-vendor="sonicwall"] {
+  color-scheme: dark;
+  --fw-bg: #0B1220;
+  --fw-bg-input: #101A2E;
+  --fw-surface: #131F36;
+  --fw-surface-alt: #1A2945;
+  --fw-surface-soft: #16233B;
+  --fw-surface-chip: #1E3254;
+  --fw-border: #243656;
+  --fw-border-strong: #324A73;
+  --fw-border-soft: #1C2B47;
+  --fw-heading: #F1F5F9;
+  --fw-text: #E2E8F0;
+  --fw-text-body: #CBD5E1;
+  --fw-text-muted: #94A3B8;
+  --fw-text-subtle: #7C8FA6;
+  --fw-text-faint: #64748B;
+  --fw-accent: #2563EB;
+  --fw-accent-hover: #1D4ED8;
+  --fw-accent-mid: #3B82F6;
+  --fw-accent-on-dark: #BFDBFE;
+  --fw-terminal-bg: #060B14;
+  --fw-terminal-text: #E2E8F0;
+}
+
+[data-theme="dark"][data-vendor="fortigate"] {
+  color-scheme: dark;
+  --fw-bg: #140B0D;
+  --fw-bg-input: #1D1013;
+  --fw-surface: #211216;
+  --fw-surface-alt: #2C181D;
+  --fw-surface-soft: #261519;
+  --fw-surface-chip: #381F25;
+  --fw-border: #3F2229;
+  --fw-border-strong: #59303A;
+  --fw-border-soft: #311A20;
+  --fw-heading: #FAF5F5;
+  --fw-text: #F1E4E6;
+  --fw-text-body: #DBC3C7;
+  --fw-text-muted: #B6959B;
+  --fw-text-subtle: #9A797F;
+  --fw-text-faint: #7E5F65;
+  --fw-accent: #DC2626;
+  --fw-accent-hover: #B91C1C;
+  --fw-accent-mid: #EF4444;
+  --fw-accent-on-dark: #FECACA;
+  --fw-terminal-bg: #0D0608;
+  --fw-terminal-text: #FCECEC;
+}
+
+[data-theme="dark"] .bg-white,
+[data-theme="dark"] .bg-white\/80,
+[data-theme="dark"] .bg-white\/90 {
+  background-color: var(--fw-surface) !important;
+}
+
+[data-theme="dark"] .bg-slate-50,
+[data-theme="dark"] .bg-slate-100 {
+  background-color: var(--fw-surface-alt) !important;
+}
+
+[data-theme="dark"] .text-slate-900,
+[data-theme="dark"] .text-slate-800 {
+  color: var(--fw-heading) !important;
+}
+
+[data-theme="dark"] .text-slate-700,
+[data-theme="dark"] .text-slate-600 {
+  color: var(--fw-text-body) !important;
+}
+
+[data-theme="dark"] .bg-red-50 {
+  background-color: rgba(220, 38, 38, 0.14) !important;
+}
+
+[data-theme="dark"] .bg-amber-50 {
+  background-color: rgba(217, 119, 6, 0.14) !important;
+}
+
+[data-theme="dark"] .bg-emerald-50 {
+  background-color: rgba(16, 185, 129, 0.14) !important;
+}
+
+[data-theme="dark"] .text-red-700,
+[data-theme="dark"] .text-red-800 {
+  color: #FCA5A5 !important;
+}
+
+[data-theme="dark"] .text-amber-800,
+[data-theme="dark"] .text-amber-900 {
+  color: #FCD34D !important;
+}
+
+[data-theme="dark"] .text-emerald-800 {
+  color: #6EE7B7 !important;
+}
+
+[data-theme="dark"] .border-red-200,
+[data-theme="dark"] .border-red-300 {
+  border-color: rgba(248, 113, 113, 0.35) !important;
+}
+
+[data-theme="dark"] .border-amber-300 {
+  border-color: rgba(251, 191, 36, 0.35) !important;
+}
+
 @layer base {
   html {
     font-family: var(--font-sans);
