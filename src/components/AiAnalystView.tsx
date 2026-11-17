@@ -25,6 +25,13 @@ interface AiAnalystViewProps {
   onConsumePendingPrompt: () => void;
 }
 
+function createMessageId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 const PROVIDER_DEFAULTS: Record<
   AiProviderType,
   { label: string; defaultModel: string; defaultBaseUrl: string; placeholderModel: string }
@@ -218,7 +225,7 @@ export function AiAnalystView({
     }
 
     const userMsg: AiChatMessage = {
-      id: crypto.randomUUID(),
+      id: createMessageId(),
       role: 'user',
       content,
       timestamp: new Date().toISOString(),
@@ -253,7 +260,7 @@ export function AiAnalystView({
         );
       } else {
         const assistantMsg: AiChatMessage = {
-          id: crypto.randomUUID(),
+          id: createMessageId(),
           role: 'assistant',
           content: String(data.reply || ''),
           timestamp: (typeof data.timestamp === 'string' && data.timestamp) || new Date().toISOString(),
