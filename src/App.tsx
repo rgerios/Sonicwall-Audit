@@ -345,6 +345,15 @@ export default function App() {
             </Suspense>
           </ErrorBoundary>
         </main>
+
+        <footer className="px-6 pb-4 pt-0 flex justify-end">
+          <span
+            title={`FW Audit v.${__APP_VERSION__}`}
+            className="text-[11px] font-mono text-[var(--fw-text-subtle)] bg-white/80 border border-[var(--fw-border)] rounded px-2 py-0.5 select-all"
+          >
+            v.{__APP_VERSION__}
+          </span>
+        </footer>
       </div>
 
       {showPasswordModal && auth.username && (
