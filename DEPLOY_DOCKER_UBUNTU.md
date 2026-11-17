@@ -9,6 +9,20 @@ Esta arquitetura separa o **FW Audit** em quatro containers independentes na mes
 
 ---
 
+## Caminho rápido: script de deploy
+
+Dentro da pasta do projeto, no servidor Ubuntu:
+
+```bash
+./deploy.sh
+```
+
+O script instala o Docker se faltar, cria o `.env` com senhas geradas (pergunta o usuário e a senha do administrador), libera as portas no UFW quando ele está ativo, constrói e sobe os containers e espera todos ficarem saudáveis. Para atualizar depois: `./deploy.sh --update`.
+
+As seções abaixo descrevem os mesmos passos feitos à mão.
+
+---
+
 ## 1. Pré-requisitos no Ubuntu Server
 
 Instale o Docker Engine e o plugin `docker compose`:
@@ -39,8 +53,7 @@ sudo usermod -aG docker $USER
 No diretório do projeto no servidor Ubuntu:
 
 ```bash
-cp .env.docker.example .env
-nano .env   # Defina uma senha forte em POSTGRES_PASSWORD
+nano .env   # Crie o arquivo com POSTGRES_PASSWORD (senha forte, só letras e números), FWAUDIT_ADMIN_USER e FWAUDIT_ADMIN_PASS
 ```
 
 Suba os 4 containers em segundo plano:
