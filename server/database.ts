@@ -42,6 +42,7 @@ export interface SyslogQuery {
   search?: string;
   action?: string;
   severity?: string;
+  device?: string;
   limit: number;
   offset: number;
 }
@@ -50,7 +51,7 @@ export interface SyslogQuery {
 export type EventTimeResolver = (ev: SyslogEvent) => number;
 
 export function buildSyslogSearchText(ev: SyslogEvent): string {
-  return `${ev.srcIp} ${ev.dstIp} ${ev.dstPort ?? ''} ${ev.protocol} ${ev.ruleRef ?? ''} ${ev.natRuleRef ?? ''} ${ev.message} ${ev.srcZone} ${ev.dstZone}`.toLowerCase();
+  return `${ev.firewallHost} ${ev.serialNumber} ${ev.srcIp} ${ev.dstIp} ${ev.dstPort ?? ''} ${ev.protocol} ${ev.ruleRef ?? ''} ${ev.natRuleRef ?? ''} ${ev.message} ${ev.srcZone} ${ev.dstZone}`.toLowerCase();
 }
 
 export class PostgresStore {
@@ -769,6 +770,12 @@ export class PostgresStore {
     if (q.severity && q.severity !== 'all') {
       params.push(q.severity);
       where.push(`severity = $${params.length}`);
+    }
+    if (q.device && q.device !== 'all') {
+      params.push(q.device);
+      where.push(
+        `(payload_json->>'firewallHost' = $${params.length} OR payload_json->>'serialNumber' = $${params.length})`
+      );
     }
     if (q.search) {
       const escaped = q.search.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);

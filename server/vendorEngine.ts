@@ -1887,15 +1887,36 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
       const search = String(req.query.q || '').trim().toLowerCase();
       const action = String(req.query.action || 'all').toLowerCase();
       const severity = String(req.query.severity || 'all').toLowerCase();
+      const device = String(req.query.device || 'all').trim();
       const limit = Math.min(1000, Math.max(10, Number(req.query.limit || 250)));
       const offset = Math.max(0, Math.floor(Number(req.query.offset || 0)) || 0);
       const total = getRuntime(site).total;
 
+      const deviceMap = new Map<string, string>();
+      for (const ev of site.syslogs) {
+        const host = ev.firewallHost && ev.firewallHost !== '-' ? ev.firewallHost : '';
+        const sn = ev.serialNumber && ev.serialNumber !== '-' ? ev.serialNumber : '';
+        const id = host || sn;
+        if (!id || deviceMap.has(id)) continue;
+        const label = host && sn && host !== sn ? `${host} (${sn})` : id;
+        deviceMap.set(id, label);
+      }
+      const devices = Array.from(deviceMap.entries())
+        .map(([id, label]) => ({ id, label }))
+        .sort((a, b) => a.label.localeCompare(b.label));
+
       if (usePg) {
         // Busca em todo o histórico retido, direto no banco
         await flushPendingInserts();
-        const result = await pgStore.querySyslogs(site.id, { search, action, severity, limit, offset });
-        res.json({ total, matched: result.matched, events: result.events, offset, limit });
+        const result = await pgStore.querySyslogs(site.id, {
+          search,
+          action,
+          severity,
+          device,
+          limit,
+          offset,
+        });
+        res.json({ total, matched: result.matched, events: result.events, devices, offset, limit });
         return;
       }
 
@@ -1908,6 +1929,9 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
           }
         }
         if (severity !== 'all' && ev.severity !== severity) return false;
+        if (device !== 'all' && ev.firewallHost !== device && ev.serialNumber !== device) {
+          return false;
+        }
         if (search && !buildSyslogSearchText(ev).includes(search)) return false;
         return true;
       });
@@ -1916,6 +1940,7 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
         total,
         matched: filtered.length,
         events: filtered.slice(offset, offset + limit),
+        devices,
         offset,
         limit,
       });

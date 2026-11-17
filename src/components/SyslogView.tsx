@@ -42,6 +42,8 @@ export function SyslogView({
   const [query, setQuery] = useState('');
   const [actionFilter, setActionFilter] = useState('all');
   const [severityFilter, setSeverityFilter] = useState('all');
+  const [deviceFilter, setDeviceFilter] = useState('all');
+  const [devices, setDevices] = useState<Array<{ id: string; label: string }>>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const [showPasteBox, setShowPasteBox] = useState(false);
@@ -54,6 +56,8 @@ export function SyslogView({
   useEffect(() => {
     setExpandedId(null);
     setConfirmReset(false);
+    setDeviceFilter('all');
+    setDevices([]);
     setFeedback(null);
   }, [vendor]);
 
@@ -77,6 +81,7 @@ export function SyslogView({
         q: query,
         action: actionFilter,
         severity: severityFilter,
+        device: deviceFilter,
         limit: String(PAGE_SIZE),
         offset: String(offset),
       });
@@ -91,6 +96,9 @@ export function SyslogView({
         });
         setTotal(data.total || 0);
         setMatched(data.matched || 0);
+        if (Array.isArray(data.devices)) {
+          setDevices(data.devices);
+        }
       }
     } finally {
       setLoading(false);
@@ -100,7 +108,7 @@ export function SyslogView({
 
   useEffect(() => {
     void fetchLogs();
-  }, [vendor, query, actionFilter, severityFilter, refreshToken]);
+  }, [vendor, query, actionFilter, severityFilter, deviceFilter, refreshToken]);
 
   const handleFileUpload = async (file: File | undefined) => {
     if (!file) return;
@@ -277,6 +285,20 @@ export function SyslogView({
             <option value="notice">Notice</option>
             <option value="info">Info</option>
           </select>
+
+          <select
+            value={deviceFilter}
+            onChange={(e) => setDeviceFilter(e.target.value)}
+            aria-label="Filtrar por device"
+            className="px-3 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-white text-[var(--fw-text-body)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)] max-w-[220px]"
+          >
+            <option value="all">Todos os devices</option>
+            {devices.map((dev) => (
+              <option key={dev.id} value={dev.id}>
+                {dev.label}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
@@ -432,6 +454,7 @@ export function SyslogView({
                 <tr className="border-b border-[var(--fw-border)] text-[var(--fw-text-muted)] bg-[var(--fw-bg)]">
                   <th className="py-2.5 pl-4 pr-2 text-left font-medium w-8" />
                   <th className="py-2.5 px-3 text-left font-medium">Data / Hora</th>
+                  <th className="py-2.5 px-3 text-left font-medium">Device</th>
                   <th className="py-2.5 px-3 text-left font-medium">Ação</th>
                   <th className="py-2.5 px-3 text-left font-medium">Origem</th>
                   <th className="py-2.5 px-3 text-left font-medium">Destino</th>
@@ -458,6 +481,31 @@ export function SyslogView({
                         </td>
                         <td className="py-2.5 px-3 font-mono text-[var(--fw-text-muted)] whitespace-nowrap tabular-nums">
                           {ev.timestamp}
+                        </td>
+                        <td className="py-2.5 px-3 font-mono text-[var(--fw-heading)] whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const id =
+                                (ev.firewallHost && ev.firewallHost !== '-' ? ev.firewallHost : '') ||
+                                (ev.serialNumber && ev.serialNumber !== '-' ? ev.serialNumber : '');
+                              if (id) setDeviceFilter(deviceFilter === id ? 'all' : id);
+                            }}
+                            title="Clique para filtrar apenas este device"
+                            className="text-left hover:underline cursor-pointer"
+                          >
+                            {ev.firewallHost && ev.firewallHost !== '-'
+                              ? ev.firewallHost
+                              : ev.serialNumber || '-'}
+                          </button>
+                          {ev.serialNumber &&
+                            ev.serialNumber !== '-' &&
+                            ev.firewallHost !== ev.serialNumber && (
+                              <span className="block text-[10px] text-[var(--fw-text-subtle)]">
+                                {ev.serialNumber}
+                              </span>
+                            )}
                         </td>
                         <td className="py-2.5 px-3 whitespace-nowrap">{renderActionLabel(ev.action)}</td>
                         <td className="py-2.5 px-3 font-mono text-[var(--fw-heading)] whitespace-nowrap">
@@ -488,8 +536,17 @@ export function SyslogView({
                       </tr>
                       {isOpen && (
                         <tr className="bg-[var(--fw-bg)]">
-                          <td colSpan={8} className="px-6 py-4 border-t border-[var(--fw-border)]">
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs mb-3">
+                          <td colSpan={9} className="px-6 py-4 border-t border-[var(--fw-border)]">
+                            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs mb-3">
+                              <div>
+                                <span className="text-[var(--fw-text-muted)]">Device:</span>{' '}
+                                <span className="font-mono text-[var(--fw-heading)] font-medium">
+                                  {ev.firewallHost || '-'}
+                                  {ev.serialNumber && ev.serialNumber !== '-'
+                                    ? ` (${ev.serialNumber})`
+                                    : ''}
+                                </span>
+                              </div>
                               <div>
                                 <span className="text-[var(--fw-text-muted)]">Categoria:</span>{' '}
                                 <span className="text-[var(--fw-heading)] font-medium">
