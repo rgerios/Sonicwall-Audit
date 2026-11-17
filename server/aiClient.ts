@@ -256,8 +256,9 @@ async function callOpenAiCompatibleProvider(
     headers.Authorization = `Bearer ${apiKey}`;
   }
   if (settings.provider === 'openrouter') {
-    headers['HTTP-Referer'] = process.env.APP_URL || 'http://localhost:3000';
-    headers['X-Title'] = 'SonicAudit';
+    const appUrl = (process.env.APP_URL || '').trim();
+    headers['HTTP-Referer'] = /^https?:\/\//i.test(appUrl) ? appUrl : 'http://localhost:3000';
+    headers['X-Title'] = 'FW Audit';
   }
 
   const messages = [
@@ -276,6 +277,7 @@ async function callOpenAiCompatibleProvider(
       model,
       messages,
     }),
+    signal: AbortSignal.timeout(60_000),
   });
 
   const rawBody = await response.text();

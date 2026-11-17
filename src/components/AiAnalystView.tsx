@@ -125,8 +125,15 @@ export function AiAnalystView({
     setConfigStatus(null);
   };
 
-  const handleSaveConfig = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const hasUnsavedConfig = Boolean(
+    apiKeyInput.trim() ||
+      (config &&
+        (provider !== config.provider ||
+          model !== (config.model || PROVIDER_DEFAULTS[config.provider].defaultModel) ||
+          baseUrl !== (config.baseUrl || PROVIDER_DEFAULTS[config.provider].defaultBaseUrl)))
+  );
+
+  const saveCurrentConfig = async (): Promise<boolean> => {
     setSavingConfig(true);
     setConfigStatus(null);
     try {
@@ -140,22 +147,39 @@ export function AiAnalystView({
           apiKey: apiKeyInput.trim() || undefined,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setConfigStatus({ type: 'err', text: data.error || 'Erro ao salvar configuração.' });
-      } else {
-        setConfig(data as AiPublicConfig);
-        setApiKeyInput('');
-        setConfigStatus({
-          type: 'ok',
-          text: `Provedor ${PROVIDER_DEFAULTS[provider].label} (${data.model}) salvo no servidor.`,
-        });
+      const raw = await res.text();
+      let data: Record<string, unknown> = {};
+      try {
+        data = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+      } catch {
+        // non-JSON response
       }
+      if (!res.ok) {
+        setConfigStatus({
+          type: 'err',
+          text: (typeof data.error === 'string' && data.error) || `Erro HTTP ${res.status} ao salvar configuração.`,
+        });
+        return false;
+      }
+      const saved = data as unknown as AiPublicConfig;
+      setConfig(saved);
+      setApiKeyInput('');
+      setConfigStatus({
+        type: 'ok',
+        text: `Provedor ${PROVIDER_DEFAULTS[provider].label} (${saved.model || model}) salvo no servidor.`,
+      });
+      return true;
     } catch {
       setConfigStatus({ type: 'err', text: 'Falha de rede ao salvar configuração.' });
+      return false;
     } finally {
       setSavingConfig(false);
     }
+  };
+
+  const handleSaveConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await saveCurrentConfig();
   };
 
   const handleClearKey = async () => {
@@ -185,6 +209,14 @@ export function AiAnalystView({
     const content = (textToSend ?? input).trim();
     if (!content || sending) return;
 
+    if (hasUnsavedConfig) {
+      const saved = await saveCurrentConfig();
+      if (!saved) {
+        setChatError('Não foi possível salvar a configuração do provedor de IA antes do envio.');
+        return;
+      }
+    }
+
     const userMsg: AiChatMessage = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -207,17 +239,26 @@ export function AiAnalystView({
           history: historySnapshot,
         }),
       });
-      const data = await res.json();
+      const raw = await res.text();
+      let data: Record<string, unknown> = {};
+      try {
+        data = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+      } catch {
+        // non-JSON response
+      }
       if (!res.ok) {
-        setChatError(data.error || 'Erro ao obter análise da IA.');
+        setChatError(
+          (typeof data.error === 'string' && data.error) ||
+            `Erro HTTP ${res.status} ao obter análise da IA.`
+        );
       } else {
         const assistantMsg: AiChatMessage = {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: data.reply,
-          timestamp: data.timestamp || new Date().toISOString(),
-          provider: data.provider,
-          model: data.modelUsed,
+          content: String(data.reply || ''),
+          timestamp: (typeof data.timestamp === 'string' && data.timestamp) || new Date().toISOString(),
+          provider: data.provider as AiProviderType | undefined,
+          model: typeof data.modelUsed === 'string' ? data.modelUsed : undefined,
         };
         setMessages((prev) => [...prev, assistantMsg]);
       }
@@ -290,7 +331,7 @@ export function AiAnalystView({
                     type="button"
                     onClick={() => void sendMessage(prompt)}
                     disabled={sending}
-                    className="text-left p-3.5 bg-white border border-[var(--fw-border)] rounded-md hover:border-[var(--fw-border-strong)] hover:bg-[var(--fw-surface)]/70 transition-colors text-xs text-[var(--fw-text-body)] leading-snug"
+                    className="text-left p-3.5 bg-white border border-[var(--fw-border)] rounded-md hover:border-[var(--fw-border-strong)] hover:bg-[var(--fw-surface)]/70 transition-colors text-xs text-[var(--fw-text-body)] leading-snug cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {prompt}
                   </button>
@@ -361,7 +402,8 @@ export function AiAnalystView({
             <button
               type="submit"
               disabled={sending || !input.trim()}
-              className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-40 whitespace-nowrap shrink-0"
+              title={!input.trim() ? 'Digite uma pergunta no campo ao lado ou clique em uma sugestão acima' : 'Enviar pergunta'}
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed whitespace-nowrap shrink-0"
             >
               <Send className="w-3.5 h-3.5" />
               Enviar
@@ -518,9 +560,13 @@ export function AiAnalystView({
         <button
           type="submit"
           disabled={savingConfig}
-          className="w-full py-2 px-4 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-50"
+          className="w-full py-2 px-4 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
         >
-          {savingConfig ? 'Salvando...' : 'Salvar Configuração de IA'}
+          {savingConfig
+            ? 'Salvando...'
+            : hasUnsavedConfig
+              ? 'Salvar Configuração de IA (alterações pendentes)'
+              : 'Salvar Configuração de IA'}
         </button>
       </form>
     </div>
