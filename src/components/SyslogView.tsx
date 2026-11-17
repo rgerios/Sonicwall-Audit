@@ -306,13 +306,17 @@ export function SyslogView({
           >
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
-          {total > 0 && !confirmReset && (
+          {!confirmReset && (
             <button
               type="button"
               onClick={() => setConfirmReset(true)}
-              disabled={clearing}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-700 bg-white border border-red-200 rounded-md hover:bg-red-50 cursor-pointer disabled:opacity-50"
-              title="Resetar syslogs e começar do zero"
+              disabled={clearing || total === 0}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-700 bg-white border border-red-200 rounded-md hover:bg-red-50 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+              title={
+                total === 0
+                  ? 'Nenhum syslog armazenado para limpar'
+                  : 'Limpar todos os syslogs recebidos e começar do zero'
+              }
               aria-label="Resetar todos os syslogs"
             >
               <RotateCcw className="w-3.5 h-3.5" />
