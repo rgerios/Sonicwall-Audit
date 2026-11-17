@@ -103,7 +103,7 @@ export function LoginView({ needsSetup, onAuthenticated }: LoginViewProps) {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                minLength={6}
+                minLength={10}
                 autoComplete={needsSetup ? 'new-password' : 'current-password'}
                 placeholder="••••••••"
                 className="w-full px-3 py-2 pr-9 text-xs border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
@@ -129,7 +129,7 @@ export function LoginView({ needsSetup, onAuthenticated }: LoginViewProps) {
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
-                minLength={6}
+                minLength={10}
                 autoComplete="new-password"
                 placeholder="••••••••"
                 className="w-full px-3 py-2 text-xs border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"

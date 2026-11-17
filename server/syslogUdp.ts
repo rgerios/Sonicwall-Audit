@@ -7,10 +7,10 @@ export class SyslogUdpReceiver {
   private socket: dgram.Socket | null = null;
   private vendor: FirewallVendor;
   private status: UdpListenerStatus;
-  private onEventsCallback: (events: SyslogEvent[]) => void;
+  private onEventsCallback: (events: SyslogEvent[], remoteAddress: string) => void;
 
   constructor(
-    onEvents: (events: SyslogEvent[]) => void,
+    onEvents: (events: SyslogEvent[], remoteAddress: string) => void,
     vendor: FirewallVendor = 'sonicwall'
   ) {
     this.onEventsCallback = onEvents;
@@ -36,7 +36,8 @@ export class SyslogUdpReceiver {
     }
 
     return new Promise((resolve, reject) => {
-      const sock = dgram.createSocket('udp4');
+      // Buffer de recepção maior para absorver rajadas sem perda no kernel
+      const sock = dgram.createSocket({ type: 'udp4', recvBufferSize: 8 * 1024 * 1024 });
 
       sock.on('error', (err) => {
         this.status.lastError = err.message;
@@ -46,7 +47,7 @@ export class SyslogUdpReceiver {
         }
       });
 
-      sock.on('message', (msg) => {
+      sock.on('message', (msg, rinfo) => {
         const text = msg.toString('utf8');
         const parsed =
           this.vendor === 'fortigate'
@@ -55,7 +56,7 @@ export class SyslogUdpReceiver {
         if (parsed.length > 0) {
           this.status.packetsReceived += parsed.length;
           this.status.lastPacketAt = new Date().toISOString();
-          this.onEventsCallback(parsed);
+          this.onEventsCallback(parsed, rinfo.address);
         }
       });
 

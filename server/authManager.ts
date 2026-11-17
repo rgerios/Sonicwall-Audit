@@ -20,11 +20,17 @@ interface AuthStoreFile {
 
 const SESSION_COOKIE_NAME = 'sonicaudit_session';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const MIN_PASSWORD_LENGTH = 10;
+const MAX_LOGIN_FAILURES = 5;
+const LOGIN_LOCK_MS = 15 * 60 * 1000;
+const USERS_REFRESH_MS = 15 * 1000;
 
 export class AuthManager {
   private filePath: string;
   private pgStore: PostgresStore | null;
   private data: AuthStoreFile;
+  private loginFailures = new Map<string, { count: number; lockedUntil: number }>();
+  private lastUsersRefreshMs = 0;
 
   constructor(dataDir: string, pgStore?: PostgresStore) {
     this.filePath = path.join(dataDir, 'auth.json');
@@ -62,7 +68,18 @@ export class AuthManager {
         for (const u of this.data.users) {
           await this.pgStore.insertUser(u);
         }
+        // Dois backends podem subir ao mesmo tempo e só um grava os segredos (ON CONFLICT
+        // DO NOTHING). Relê o banco para que todos adotem exatamente os mesmos segredos.
+        const stored = await this.pgStore.loadAuthState();
+        if (stored.secrets) {
+          this.data = {
+            sessionSecret: stored.secrets.sessionSecret,
+            encryptionKey: stored.secrets.encryptionKey,
+            users: stored.users,
+          };
+        }
       }
+      this.lastUsersRefreshMs = Date.now();
     } else {
       try {
         const raw = await fs.readFile(this.filePath, 'utf8');
@@ -82,9 +99,64 @@ export class AuthManager {
     // Optional Linux headless bootstrap via environment variables
     const envUser = process.env.SONICAUDIT_ADMIN_USER?.trim();
     const envPass = process.env.SONICAUDIT_ADMIN_PASS?.trim();
-    if (this.data.users.length === 0 && envUser && envPass && envPass.length >= 6) {
-      await this.createInitialUser(envUser, envPass);
+    if (this.data.users.length === 0 && envUser && envPass) {
+      if (envPass.length < MIN_PASSWORD_LENGTH) {
+        console.warn(
+          `[auth] SONICAUDIT_ADMIN_PASS ignorada: a senha deve ter pelo menos ${MIN_PASSWORD_LENGTH} caracteres.`
+        );
+      } else {
+        await this.createInitialUser(envUser, envPass).catch(() => undefined);
+      }
     }
+  }
+
+  /**
+   * Recarrega usuários do PostgreSQL (com intervalo mínimo) para refletir senhas alteradas
+   * ou usuários criados pelo outro container de backend.
+   */
+  async refreshUsersIfStale(force = false): Promise<void> {
+    if (!this.pgStore || !this.pgStore.isEnabled()) return;
+    const now = Date.now();
+    if (!force && now - this.lastUsersRefreshMs < USERS_REFRESH_MS) return;
+    this.lastUsersRefreshMs = now;
+    try {
+      const state = await this.pgStore.loadAuthState();
+      this.data.users = state.users;
+    } catch (err) {
+      console.warn('[auth] Falha ao recarregar usuários:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /** Retorna os segundos restantes de bloqueio, ou 0 se a tentativa é permitida. */
+  getLoginLockSeconds(key: string): number {
+    const entry = this.loginFailures.get(key);
+    if (!entry) return 0;
+    const remaining = entry.lockedUntil - Date.now();
+    if (remaining <= 0) {
+      if (entry.lockedUntil > 0) this.loginFailures.delete(key);
+      return 0;
+    }
+    return Math.ceil(remaining / 1000);
+  }
+
+  registerLoginFailure(key: string): void {
+    const entry = this.loginFailures.get(key) || { count: 0, lockedUntil: 0 };
+    entry.count += 1;
+    if (entry.count >= MAX_LOGIN_FAILURES) {
+      entry.lockedUntil = Date.now() + LOGIN_LOCK_MS;
+      entry.count = 0;
+    }
+    this.loginFailures.set(key, entry);
+    if (this.loginFailures.size > 5000) {
+      const now = Date.now();
+      for (const [k, v] of this.loginFailures) {
+        if (v.lockedUntil < now) this.loginFailures.delete(k);
+      }
+    }
+  }
+
+  clearLoginFailures(key: string): void {
+    this.loginFailures.delete(key);
   }
 
   private async persist(): Promise<void> {
@@ -124,6 +196,7 @@ export class AuthManager {
   }
 
   async createInitialUser(usernameRaw: string, password: string): Promise<string> {
+    await this.refreshUsersIfStale(true);
     if (!this.needsSetup()) {
       throw new Error('O acesso administrativo já foi configurado.');
     }
@@ -131,8 +204,8 @@ export class AuthManager {
     if (username.length < 3) {
       throw new Error('O nome de usuário deve ter pelo menos 3 caracteres.');
     }
-    if (password.length < 6) {
-      throw new Error('A senha deve ter pelo menos 6 caracteres.');
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      throw new Error(`A senha deve ter pelo menos ${MIN_PASSWORD_LENGTH} caracteres.`);
     }
     const newUser: StoredUser = {
       username,
@@ -143,6 +216,9 @@ export class AuthManager {
     this.data.users.push(newUser);
     if (this.pgStore && this.pgStore.isEnabled()) {
       await this.pgStore.insertUser(newUser);
+      // Se o outro backend criou o mesmo usuário primeiro, o INSERT é ignorado: adota o
+      // registro que realmente ficou no banco para que os dois validem a mesma senha.
+      await this.refreshUsersIfStale(true);
     } else {
       await this.persist();
     }
@@ -170,8 +246,8 @@ export class AuthManager {
     if (!this.verifyPassword(currentPassword, found.passwordHash)) {
       throw new Error('Senha atual incorreta.');
     }
-    if (newPassword.length < 6) {
-      throw new Error('A nova senha deve ter pelo menos 6 caracteres.');
+    if (newPassword.length < MIN_PASSWORD_LENGTH) {
+      throw new Error(`A nova senha deve ter pelo menos ${MIN_PASSWORD_LENGTH} caracteres.`);
     }
     const nextHash = this.hashPassword(newPassword);
     found.passwordHash = nextHash;
@@ -182,9 +258,23 @@ export class AuthManager {
     }
   }
 
+  /** Impressão digital da senha atual: trocar a senha invalida as sessões existentes. */
+  private passwordVersion(user: StoredUser): string {
+    return crypto
+      .createHmac('sha256', this.data.sessionSecret)
+      .update(user.passwordHash)
+      .digest('base64url')
+      .slice(0, 16);
+  }
+
   private signToken(username: string): string {
+    const user = this.data.users.find((u) => u.username === username);
     const payload = Buffer.from(
-      JSON.stringify({ u: username, exp: Date.now() + SESSION_TTL_MS }),
+      JSON.stringify({
+        u: username,
+        exp: Date.now() + SESSION_TTL_MS,
+        v: user ? this.passwordVersion(user) : '',
+      }),
       'utf8'
     ).toString('base64url');
     const sig = crypto
@@ -217,12 +307,14 @@ export class AuthManager {
       const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
         u?: string;
         exp?: number;
+        v?: string;
       };
       if (!parsed.u || typeof parsed.exp !== 'number' || parsed.exp < Date.now()) {
         return null;
       }
-      const userExists = this.data.users.some((u) => u.username === parsed.u);
-      return userExists ? parsed.u : null;
+      const user = this.data.users.find((u) => u.username === parsed.u);
+      if (!user || parsed.v !== this.passwordVersion(user)) return null;
+      return parsed.u;
     } catch {
       return null;
     }
@@ -256,7 +348,7 @@ export class AuthManager {
       'Path=/',
       `Max-Age=${maxAgeSec}`,
       'HttpOnly',
-      this.isHttps(req) ? 'SameSite=None; Secure' : 'SameSite=Lax',
+      this.isHttps(req) ? 'SameSite=Lax; Secure' : 'SameSite=Lax',
     ];
     res.setHeader('Set-Cookie', attrs.join('; '));
   }
@@ -267,7 +359,7 @@ export class AuthManager {
       'Path=/',
       'Max-Age=0',
       'HttpOnly',
-      this.isHttps(req) ? 'SameSite=None; Secure' : 'SameSite=Lax',
+      this.isHttps(req) ? 'SameSite=Lax; Secure' : 'SameSite=Lax',
     ];
     res.setHeader('Set-Cookie', attrs.join('; '));
   }

@@ -115,11 +115,15 @@ function normalizeRateMbps(obj: Record<string, unknown>, direction: 'rx' | 'tx')
     `${direction}Bps`,
     `${direction}_bits_per_second`,
     `${direction}_throughput`,
-    `${direction}_bytes_per_second`,
   ]);
   if (bps !== null) {
-    // bytes_per_second vs bits_per_second heuristic: if key contains byte, multiply by 8
     return Math.max(0, Number((bps / 1_000_000).toFixed(2)));
+  }
+
+  // Taxas informadas em bytes/s precisam ser convertidas para bits (x8)
+  const bytesPerSec = pickNumber(obj, [`${direction}_bytes_per_second`]);
+  if (bytesPerSec !== null) {
+    return Math.max(0, Number(((bytesPerSec * 8) / 1_000_000).toFixed(2)));
   }
 
   return 0;
@@ -515,11 +519,16 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
       const name = pickString(vpn, ['name', 'policy_name', 'tunnel_name']) || 'VPN IPSec';
       const peer = pickString(vpn, ['peer_gateway', 'remote_gateway', 'gateway', 'peer']) || '-';
       const stateText = pickString(vpn, ['status', 'state', 'tunnel_status']).toLowerCase();
+      // "inactive" contém "active": avalia primeiro os estados negativos. Sem estado
+      // reportado pela API, assume o estado administrativo (habilitada).
+      const negative = /down|inactive|disabled|not\s*established|idle|fail/.test(stateText);
       const up =
-        stateText.includes('up') ||
-        stateText.includes('active') ||
-        stateText.includes('established') ||
-        vpn.enabled === true;
+        !negative &&
+        (stateText.includes('up') ||
+          stateText.includes('active') ||
+          stateText.includes('established') ||
+          stateText.includes('connected') ||
+          (stateText === '' && vpn.enabled === true));
       vpns.push({
         name,
         type: 'ipsec',

@@ -23,12 +23,16 @@ services:
       dockerfile: Dockerfile.backend
     container_name: fwaudit-backend-sonicwall
     restart: unless-stopped
+    stop_grace_period: 30s
     depends_on:
       db:
         condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 3000
+      TZ: ${TZ:-America/Sao_Paulo}
+      SYSLOG_MEMORY_WINDOW: ${SYSLOG_MEMORY_WINDOW:-50000}
+      SYSLOG_MAX_ROWS_PER_SITE: ${SYSLOG_MAX_ROWS_PER_SITE:-0}
       FW_VENDOR: sonicwall
       SERVE_STATIC: "false"
       DATABASE_URL: postgres://${POSTGRES_USER:-fwaudit}:${POSTGRES_PASSWORD:-fwaudit_change_me}@db:5432/${POSTGRES_DB:-fwaudit}
@@ -48,12 +52,16 @@ services:
       dockerfile: Dockerfile.backend
     container_name: fwaudit-backend-fortigate
     restart: unless-stopped
+    stop_grace_period: 30s
     depends_on:
       db:
         condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 3001
+      TZ: ${TZ:-America/Sao_Paulo}
+      SYSLOG_MEMORY_WINDOW: ${SYSLOG_MEMORY_WINDOW:-50000}
+      SYSLOG_MAX_ROWS_PER_SITE: ${SYSLOG_MAX_ROWS_PER_SITE:-0}
       FW_VENDOR: fortigate
       SERVE_STATIC: "false"
       DATABASE_URL: postgres://${POSTGRES_USER:-fwaudit}:${POSTGRES_PASSWORD:-fwaudit_change_me}@db:5432/${POSTGRES_DB:-fwaudit}

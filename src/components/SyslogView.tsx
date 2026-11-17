@@ -62,24 +62,35 @@ export function SyslogView({
     }
   }, [pendingQuery, onConsumePendingQuery]);
 
-  const fetchLogs = async () => {
-    setLoading(true);
+  const PAGE_SIZE = 250;
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const fetchLogs = async (offset = 0) => {
+    if (offset === 0) setLoading(true);
+    else setLoadingMore(true);
     try {
       const params = new URLSearchParams({
         q: query,
         action: actionFilter,
         severity: severityFilter,
-        limit: '250',
+        limit: String(PAGE_SIZE),
+        offset: String(offset),
       });
       const res = await fetch(vendorApiUrl(vendor, `/syslogs?${params.toString()}`));
       if (res.ok) {
         const data = await res.json();
-        setEvents(data.events || []);
+        const page: SyslogEvent[] = data.events || [];
+        setEvents((prev) => {
+          if (offset === 0) return page;
+          const known = new Set(prev.map((e) => e.id));
+          return [...prev, ...page.filter((e) => !known.has(e.id))];
+        });
         setTotal(data.total || 0);
         setMatched(data.matched || 0);
       }
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   };
 
@@ -463,6 +474,20 @@ export function SyslogView({
                 })}
               </tbody>
             </table>
+            {events.length < matched && (
+              <div className="px-4 py-3 border-t border-[var(--fw-border)] flex justify-center">
+                <button
+                  type="button"
+                  disabled={loadingMore}
+                  onClick={() => void fetchLogs(events.length)}
+                  className="px-4 py-1.5 text-xs font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-bg)] disabled:opacity-50"
+                >
+                  {loadingMore
+                    ? 'Carregando...'
+                    : `Carregar mais ${Math.min(PAGE_SIZE, matched - events.length).toLocaleString('pt-BR')} (restam ${(matched - events.length).toLocaleString('pt-BR')})`}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

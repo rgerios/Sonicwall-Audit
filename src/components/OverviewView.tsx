@@ -40,6 +40,7 @@ import {
 import type { ActiveSection, AuditOverview, FirewallVendor } from '../types.ts';
 import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
 import { OverviewAlertCenter } from './OverviewAlertCenter.tsx';
+import { ResourceHistoryCard } from './ResourceHistoryCard.tsx';
 
 interface OverviewViewProps {
   vendor: FirewallVendor;
@@ -1086,6 +1087,8 @@ export function OverviewView({
         onAnalyzeWithAi={onAnalyzeWithAi}
         openConfigSignal={openAlertConfigSignal}
       />
+
+      <ResourceHistoryCard vendor={vendor} overview={overview} />
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-xs text-[var(--fw-text-muted)]">

@@ -118,7 +118,9 @@ export function NotificationToastStack({
     if (!overview) return;
     const alerts = overview.alerts ?? [];
     const dismissedSet = new Set(dismissedKeys);
-    const activeAlerts = alerts.filter((a) => !dismissedSet.has(getAlertFingerprint(a)));
+    const activeAlerts = alerts.filter(
+      (a) => a.status !== 'acknowledged' && !dismissedSet.has(getAlertFingerprint(a))
+    );
 
     const newlyTriggered: OverviewAlert[] = [];
     for (const alert of activeAlerts) {

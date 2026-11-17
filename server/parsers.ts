@@ -445,40 +445,130 @@ function fieldMatches(ruleVal: string, logVal: string | number | null): boolean 
   return false;
 }
 
-export function correlateTrafficAndRules(
-  inputRules: FirewallRule[],
-  inputNats: NatPolicy[],
-  syslogs: SyslogEvent[]
-): { rules: FirewallRule[]; nats: NatPolicy[] } {
-  const sortedRules = [...inputRules].sort((a, b) => a.priority - b.priority);
+function ruleMatchesEvent(rule: FirewallRule, ev: SyslogEvent): boolean {
+  const explicitRuleMatch =
+    ev.ruleRef !== null &&
+    (ev.ruleRef === rule.id || ev.ruleRef.toLowerCase() === rule.name.toLowerCase());
+  if (explicitRuleMatch) return true;
 
-  const rules: FirewallRule[] = sortedRules.map((rule, idx) => {
-    let syslogHits = 0;
-    let lastHitAt: string | null = null;
+  return (
+    ev.action !== 'system' &&
+    (rule.fromZone === 'Any' || ev.srcZone === '-' || ev.srcZone.toLowerCase() === rule.fromZone.toLowerCase()) &&
+    (rule.toZone === 'Any' || ev.dstZone === '-' || ev.dstZone.toLowerCase() === rule.toZone.toLowerCase()) &&
+    fieldMatches(rule.source, ev.srcIp) &&
+    fieldMatches(rule.destination, ev.dstIp) &&
+    fieldMatches(rule.service, ev.dstPort)
+  );
+}
 
-    for (const ev of syslogs) {
-      const explicitRuleMatch =
-        ev.ruleRef !== null &&
-        (ev.ruleRef === rule.id || ev.ruleRef.toLowerCase() === rule.name.toLowerCase());
+function natMatchesEvent(nat: NatPolicy, ev: SyslogEvent): boolean {
+  const explicitNatMatch =
+    ev.natRuleRef !== null &&
+    (ev.natRuleRef === nat.id || ev.natRuleRef.toLowerCase() === nat.name.toLowerCase());
+  if (explicitNatMatch) return true;
 
-      const tupleMatch =
-        ev.action !== 'system' &&
-        (rule.fromZone === 'Any' || ev.srcZone === '-' || ev.srcZone.toLowerCase() === rule.fromZone.toLowerCase()) &&
-        (rule.toZone === 'Any' || ev.dstZone === '-' || ev.dstZone.toLowerCase() === rule.toZone.toLowerCase()) &&
-        fieldMatches(rule.source, ev.srcIp) &&
-        fieldMatches(rule.destination, ev.dstIp) &&
-        fieldMatches(rule.service, ev.dstPort);
+  return (
+    (ev.natDstIp !== null && fieldMatches(nat.transDestination, ev.natDstIp)) ||
+    (ev.natSrcIp !== null && fieldMatches(nat.transSource, ev.natSrcIp)) ||
+    (nat.origDestination !== 'Any' &&
+      fieldMatches(nat.origDestination, ev.dstIp) &&
+      fieldMatches(nat.origService, ev.dstPort))
+  );
+}
 
-      if (explicitRuleMatch || tupleMatch) {
-        syslogHits += 1;
-        if (!lastHitAt || ev.timestamp > lastHitAt) {
-          lastHitAt = ev.timestamp;
-        }
+/**
+ * Soma aos contadores existentes (syslogHits / lastHitAt) apenas os eventos informados.
+ * Custo O(políticas × eventos novos), independente do histórico já armazenado.
+ */
+export function accumulateSyslogHits(
+  rules: FirewallRule[],
+  nats: NatPolicy[],
+  events: SyslogEvent[]
+): void {
+  if (events.length === 0) return;
+  for (const rule of rules) {
+    for (const ev of events) {
+      if (ruleMatchesEvent(rule, ev)) {
+        rule.syslogHits += 1;
+        if (!rule.lastHitAt || ev.timestamp > rule.lastHitAt) rule.lastHitAt = ev.timestamp;
       }
     }
+  }
+  for (const nat of nats) {
+    for (const ev of events) {
+      if (natMatchesEvent(nat, ev)) {
+        nat.syslogHits += 1;
+        if (!nat.lastHitAt || ev.timestamp > nat.lastHitAt) nat.lastHitAt = ev.timestamp;
+      }
+    }
+  }
+}
 
-    // Check if shadowed by an earlier broader rule in the same zone pair
+/** Copia os contadores de syslog das políticas anteriores para as recém-sincronizadas. */
+export function carryOverSyslogHits<T extends { id: string; uuid?: string; syslogHits: number; lastHitAt: string | null }>(
+  previous: T[],
+  next: T[]
+): void {
+  const byKey = new Map<string, T>();
+  for (const p of previous) {
+    byKey.set(p.id, p);
+    if (p.uuid) byKey.set(`uuid:${p.uuid}`, p);
+  }
+  for (const n of next) {
+    const old = (n.uuid ? byKey.get(`uuid:${n.uuid}`) : undefined) || byKey.get(n.id);
+    if (old) {
+      n.syslogHits = old.syslogHits || 0;
+      n.lastHitAt = old.lastHitAt ?? null;
+    }
+  }
+}
+
+export interface ClassifyContext {
+  /** Início da janela de observação dos syslogs (ISO). */
+  observedSince?: string | null;
+  /** Uptime do appliance: o contador de hits do firewall zera a cada reboot. */
+  uptimeSeconds?: number;
+}
+
+function describeObservation(ctx?: ClassifyContext): string {
+  const parts: string[] = [];
+  if (ctx?.uptimeSeconds && ctx.uptimeSeconds > 0) {
+    const days = ctx.uptimeSeconds / 86400;
+    parts.push(
+      `contador do appliance cobre ${days >= 1 ? `${Math.floor(days)} dia(s)` : 'menos de 1 dia'} de uptime`
+    );
+  }
+  if (ctx?.observedSince) {
+    const ms = Date.parse(ctx.observedSince);
+    if (Number.isFinite(ms)) {
+      const days = (Date.now() - ms) / 86400000;
+      parts.push(
+        `syslogs observados há ${days >= 1 ? `${Math.floor(days)} dia(s)` : 'menos de 1 dia'}`
+      );
+    }
+  }
+  if (parts.length === 0) return '';
+  const shortWindow =
+    (ctx?.uptimeSeconds !== undefined && ctx.uptimeSeconds > 0 && ctx.uptimeSeconds < 30 * 86400) ||
+    (ctx?.observedSince !== undefined &&
+      ctx.observedSince !== null &&
+      Date.now() - Date.parse(ctx.observedSince) < 30 * 86400000);
+  return ` Janela: ${parts.join('; ')}.${shortWindow ? ' Janela curta (< 30 dias): confirme antes de desabilitar.' : ''}`;
+}
+
+/** Recalcula status/achados a partir dos contadores já acumulados (não varre syslogs). */
+export function classifyPolicies(
+  inputRules: FirewallRule[],
+  inputNats: NatPolicy[],
+  ctx?: ClassifyContext
+): { rules: FirewallRule[]; nats: NatPolicy[] } {
+  const sortedRules = [...inputRules].sort((a, b) => a.priority - b.priority);
+  const observation = describeObservation(ctx);
+
+  const rules: FirewallRule[] = sortedRules.map((rule, idx) => {
+    // Sombreada por uma regra anterior mais ampla no mesmo par de zonas
     let shadowedBy: string | undefined;
+    let shadowConflict = false;
     for (let j = 0; j < idx; j += 1) {
       const prev = sortedRules[j];
       if (!prev.enabled) continue;
@@ -488,13 +578,14 @@ export function correlateTrafficAndRules(
       const broaderSrc = prev.source.toLowerCase() === 'any' || prev.source === rule.source;
       const broaderDst = prev.destination.toLowerCase() === 'any' || prev.destination === rule.destination;
       const broaderSvc = prev.service.toLowerCase() === 'any' || prev.service === rule.service;
-      if (sameZone && broaderSrc && broaderDst && broaderSvc && prev.action === rule.action) {
+      if (sameZone && broaderSrc && broaderDst && broaderSvc) {
         shadowedBy = `${prev.id} (${prev.name})`;
+        shadowConflict = prev.action !== rule.action;
         break;
       }
     }
 
-    const totalHits = rule.applianceHits + syslogHits;
+    const totalHits = rule.applianceHits + rule.syslogHits;
     const isOverPermissive =
       rule.enabled &&
       rule.action === 'allow' &&
@@ -511,49 +602,23 @@ export function correlateTrafficAndRules(
       findingReason = 'Regra desabilitada na política. Candidata à remoção definitiva após janela de retenção.';
     } else if (shadowedBy) {
       status = 'shadowed';
-      findingReason = `Sombreada pela regra anterior ${shadowedBy} antes de ser avaliada pelo SonicOS.`;
+      findingReason = shadowConflict
+        ? `Sombreada pela regra anterior ${shadowedBy}, que tem ação diferente: esta regra nunca é aplicada e o comportamento real é o da regra anterior.`
+        : `Sombreada pela regra anterior ${shadowedBy} antes de ser avaliada pelo firewall.`;
     } else if (totalHits === 0) {
       status = 'unused';
-      findingReason = 'Zero acertos no contador do SonicWall e zero correspondências nos syslogs analisados.';
+      findingReason = `Zero acertos no contador do appliance e zero correspondências nos syslogs analisados.${observation}`;
     } else if (isOverPermissive) {
       status = 'overpermissive';
       findingReason = 'Regra permissiva demais (Any → Any · Any) envolvendo zona sensível.';
     }
 
-    return {
-      ...rule,
-      syslogHits,
-      lastHitAt,
-      status,
-      shadowedBy,
-      findingReason,
-    };
+    return { ...rule, status, shadowedBy, findingReason };
   });
 
   const sortedNats = [...inputNats].sort((a, b) => a.priority - b.priority);
   const nats: NatPolicy[] = sortedNats.map((nat) => {
-    let syslogHits = 0;
-    let lastHitAt: string | null = null;
-
-    for (const ev of syslogs) {
-      const explicitNatMatch =
-        ev.natRuleRef !== null &&
-        (ev.natRuleRef === nat.id || ev.natRuleRef.toLowerCase() === nat.name.toLowerCase());
-
-      const natTupleMatch =
-        (ev.natDstIp !== null && fieldMatches(nat.transDestination, ev.natDstIp)) ||
-        (ev.natSrcIp !== null && fieldMatches(nat.transSource, ev.natSrcIp)) ||
-        (nat.origDestination !== 'Any' && fieldMatches(nat.origDestination, ev.dstIp) && fieldMatches(nat.origService, ev.dstPort));
-
-      if (explicitNatMatch || natTupleMatch) {
-        syslogHits += 1;
-        if (!lastHitAt || ev.timestamp > lastHitAt) {
-          lastHitAt = ev.timestamp;
-        }
-      }
-    }
-
-    const totalHits = nat.applianceHits + syslogHits;
+    const totalHits = nat.applianceHits + nat.syslogHits;
     const isOrphaned =
       nat.enabled &&
       nat.transDestination !== 'Original' &&
@@ -569,22 +634,29 @@ export function correlateTrafficAndRules(
       findingReason = 'Política NAT desabilitada. Avaliar remoção para limpar a tabela de tradução.';
     } else if (isOrphaned) {
       status = 'orphaned';
-      findingReason = 'Zero hits e nenhuma regra de firewall ativa correspondente para o destino traduzido.';
+      findingReason = `Zero hits e nenhuma regra de firewall ativa correspondente para o destino traduzido.${observation}`;
     } else if (totalHits === 0) {
       status = 'unused';
-      findingReason = 'Zero traduções no appliance e nenhuma ocorrência nos syslogs coletados.';
+      findingReason = `Zero traduções no appliance e nenhuma ocorrência nos syslogs coletados.${observation}`;
     }
 
-    return {
-      ...nat,
-      syslogHits,
-      lastHitAt,
-      status,
-      findingReason,
-    };
+    return { ...nat, status, findingReason };
   });
 
   return { rules, nats };
+}
+
+/** Recontagem completa: zera os contadores de syslog, conta todos os eventos e classifica. */
+export function correlateTrafficAndRules(
+  inputRules: FirewallRule[],
+  inputNats: NatPolicy[],
+  syslogs: SyslogEvent[],
+  ctx?: ClassifyContext
+): { rules: FirewallRule[]; nats: NatPolicy[] } {
+  const rules = inputRules.map((r) => ({ ...r, syslogHits: 0, lastHitAt: null as string | null }));
+  const nats = inputNats.map((n) => ({ ...n, syslogHits: 0, lastHitAt: null as string | null }));
+  accumulateSyslogHits(rules, nats, syslogs);
+  return classifyPolicies(rules, nats, ctx);
 }
 
 export function generateSonicOsCli(

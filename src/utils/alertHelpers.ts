@@ -62,5 +62,19 @@ export function getAlertCategoryLabel(cat: AlertCategory): string {
       return 'Falha Crítica';
     case 'suspicious-traffic':
       return 'Log Suspeito';
+    case 'vpn':
+      return 'VPN';
+    case 'license':
+      return 'Licenciamento';
+    case 'resource':
+      return 'Recursos do Appliance';
+    case 'collector':
+      return 'Coleta';
+    case 'config-change':
+      return 'Mudança de Configuração';
+    case 'auth':
+      return 'Autenticação';
+    default:
+      return 'Alerta';
   }
 }

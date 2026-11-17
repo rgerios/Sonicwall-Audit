@@ -77,7 +77,9 @@ sudo ufw allow 5515/udp comment "FW Audit FortiGate Syslog UDP"
 sudo ufw reload
 ```
 
-> **Dica**: Dentro do FW Audit (aba *Localidades & Linux*), inicie o socket UDP em `5514` no ambiente SonicWall e em `5515` no ambiente FortiGate, apontando os respectivos firewalls (ou o `rsyslog`) para o IP do servidor Ubuntu.
+> **Dica**: os receptores UDP sobem sozinhos (`5514` no SonicWall, `5515` no FortiGate) e voltam após reiniciar os containers. Aponte os firewalls (ou o `rsyslog`) para o IP do servidor Ubuntu. Com mais de um firewall cadastrado, cada log é atribuído pelo número de série ou pelo IP de origem; logs de origem não cadastrada são descartados e listados na aba *Localidades & Linux*.
+>
+> **Armazenamento**: todo o histórico de syslog fica no PostgreSQL, limitado apenas pela retenção em dias de cada firewall. Acompanhe o tamanho do banco na mesma aba; `SYSLOG_MAX_ROWS_PER_SITE` define um teto opcional de linhas por firewall. A senha do administrador precisa ter no mínimo 10 caracteres.
 
 ---
 

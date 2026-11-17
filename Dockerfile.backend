@@ -11,7 +11,9 @@ RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 COPY server.ts tsconfig.json ./
 COPY server ./server
 
-RUN mkdir -p /app/data
+# Executa sem privilégios de root; /app/data pertence ao usuário da aplicação
+RUN mkdir -p /app/data && chown -R node:node /app/data
+USER node
 
 ENV NODE_ENV=production
 ENV PORT=3000

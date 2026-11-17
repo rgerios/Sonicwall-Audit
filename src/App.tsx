@@ -12,7 +12,7 @@ import { TopBar } from './components/TopBar.tsx';
 import { UnusedNatsView } from './components/UnusedNatsView.tsx';
 import { UnusedRulesView } from './components/UnusedRulesView.tsx';
 import type { ActiveSection, AuditOverview, AuthStatus, FirewallVendor } from './types.ts';
-import { vendorApiUrl } from './utils/vendorApi.ts';
+import { setSelectedSiteId, vendorApiUrl } from './utils/vendorApi.ts';
 
 const VENDOR_STORAGE_KEY = 'fwaudit:active-vendor';
 
@@ -75,6 +75,7 @@ export default function App() {
       }
       if (res.ok) {
         const data = (await res.json()) as AuditOverview;
+        if (data.activeSite?.id) setSelectedSiteId(activeVendor, data.activeSite.id);
         setOverview(data);
       }
     } finally {
@@ -89,12 +90,26 @@ export default function App() {
   }, [auth?.authenticated, fetchOverview, refreshToken]);
 
   useEffect(() => {
-    if (!auth?.authenticated || !overview?.udpStatus.running) return;
-    const interval = setInterval(() => {
-      void fetchOverview();
-    }, 3500);
+    if (!auth?.authenticated) return;
+    // Com o receptor UDP ativo a tela acompanha quase em tempo real; sem ele, ainda assim
+    // atualiza periodicamente para refletir alertas e a sincronização automática.
+    const interval = setInterval(
+      () => {
+        if (document.visibilityState === 'visible') void fetchOverview();
+      },
+      overview?.udpStatus.running ? 5000 : 20000
+    );
     return () => clearInterval(interval);
   }, [auth?.authenticated, overview?.udpStatus.running, fetchOverview]);
+
+  // Toda resposta com overview define também o firewall desta aba (criação, exclusão, troca)
+  const applyOverview = useCallback(
+    (next: AuditOverview) => {
+      if (next.activeSite?.id) setSelectedSiteId(activeVendor, next.activeSite.id);
+      setOverview(next);
+    },
+    [activeVendor]
+  );
 
   const handleDataChanged = useCallback(() => {
     setRefreshToken((n) => n + 1);
@@ -123,12 +138,13 @@ export default function App() {
   };
 
   const handleSelectSite = async (siteId: string) => {
+    setSelectedSiteId(activeVendor, siteId);
     const res = await fetch(vendorApiUrl(activeVendor, `/sites/${siteId}/select`), {
       method: 'POST',
     });
     if (res.ok) {
       const data = await res.json();
-      if (data.overview) setOverview(data.overview);
+      if (data.overview) applyOverview(data.overview);
       setRefreshToken((n) => n + 1);
     }
   };
@@ -139,7 +155,7 @@ export default function App() {
       const res = await fetch(vendorApiUrl(activeVendor, '/sample/load'), { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
-        if (data.overview) setOverview(data.overview);
+        if (data.overview) applyOverview(data.overview);
         setRefreshToken((n) => n + 1);
       }
     } finally {
@@ -214,7 +230,7 @@ export default function App() {
               loading={loading}
               onNavigate={setActiveSection}
               onLoadSample={() => void handleLoadSample()}
-              onOverviewUpdated={setOverview}
+              onOverviewUpdated={applyOverview}
               onInvestigateSyslog={handleInvestigateSyslog}
               onAnalyzeWithAi={handleAnalyzeEventWithAi}
               openAlertConfigSignal={openAlertConfigSignal}
@@ -271,7 +287,7 @@ export default function App() {
               vendor={activeVendor}
               overview={overview}
               onDataChanged={handleDataChanged}
-              onOverviewUpdated={setOverview}
+              onOverviewUpdated={applyOverview}
             />
           )}
         </main>

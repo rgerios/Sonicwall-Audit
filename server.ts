@@ -43,12 +43,19 @@ async function startApp(): Promise<void> {
   // Automatic hourly purge across active vendor engines
   setInterval(() => {
     for (const eng of engines) {
-      eng.purgeExpired();
+      void eng.purgeExpired();
     }
   }, 60 * 60 * 1000);
 
   const app = express();
+  app.disable('x-powered-by');
   app.set('trust proxy', 1);
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'same-origin');
+    next();
+  });
   app.use(express.json({ limit: '50mb' }));
   app.use(express.text({ limit: '50mb', type: ['text/plain', 'application/octet-stream'] }));
 
@@ -94,11 +101,24 @@ async function startApp(): Promise<void> {
     }
     const username = String(req.body?.username || '').trim();
     const password = String(req.body?.password || '');
+    // Limite de tentativas por IP e por usuário (5 falhas => bloqueio de 15 minutos)
+    const lockKeys = [`ip:${req.ip}`, `user:${username.toLowerCase()}`];
+    const lockedFor = Math.max(...lockKeys.map((k) => authManager.getLoginLockSeconds(k)));
+    if (lockedFor > 0) {
+      res.setHeader('Retry-After', String(lockedFor));
+      res.status(429).json({
+        error: `Muitas tentativas de login. Tente novamente em ${Math.ceil(lockedFor / 60)} minuto(s).`,
+      });
+      return;
+    }
+    await authManager.refreshUsersIfStale(true);
     const authedUser = authManager.authenticateUser(username, password);
     if (!authedUser) {
+      for (const k of lockKeys) authManager.registerLoginFailure(k);
       res.status(401).json({ error: 'Usuário ou senha inválidos.' });
       return;
     }
+    for (const k of lockKeys) authManager.clearLoginFailures(k);
     authManager.setSessionCookie(req, res, authedUser);
     res.json({ ok: true, username: authedUser });
   });
@@ -124,11 +144,13 @@ async function startApp(): Promise<void> {
     if (pgStore.isEnabled() && authManager.needsSetup()) {
       await authManager.init();
     }
+    await authManager.refreshUsersIfStale();
     const user = authManager.getAuthenticatedUser(req);
     if (!user) {
       res.status(401).json({ error: 'Sessão não autenticada. Faça login para continuar.' });
       return;
     }
+    res.locals.username = user;
     next();
   });
 
@@ -142,6 +164,8 @@ async function startApp(): Promise<void> {
       const currentPassword = String(req.body?.currentPassword || '');
       const newPassword = String(req.body?.newPassword || '');
       await authManager.changePassword(username, currentPassword, newPassword);
+      // A troca invalida as sessões antigas; renova o cookie desta sessão.
+      authManager.setSessionCookie(req, res, username);
       res.json({ ok: true });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Não foi possível alterar a senha.';
@@ -184,11 +208,29 @@ async function startApp(): Promise<void> {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const httpServer = app.listen(PORT, '0.0.0.0', () => {
     console.log(
       `FW Audit (${FW_VENDOR_MODE}) ativo em http://0.0.0.0:${PORT} [storage=${pgStore.isEnabled() ? 'postgresql' : 'local-json'}]`
     );
   });
+
+  // Encerramento limpo: grava eventos e estado pendentes antes de sair
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[${signal}] Encerrando: gravando dados pendentes...`);
+    httpServer.close();
+    try {
+      await Promise.all(engines.map((e) => e.shutdown()));
+      await pgStore.close();
+    } catch (err) {
+      console.error('Erro ao encerrar:', err);
+    }
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
 }
 
 startApp().catch((err) => {

@@ -100,6 +100,13 @@ export interface NatPolicy {
   sourceOrigin: 'api' | 'exp' | 'json' | 'sample';
 }
 
+export interface UdpUnmatchedSource {
+  address: string;
+  serialNumber: string;
+  count: number;
+  lastSeenAt: string;
+}
+
 export interface UdpListenerStatus {
   running: boolean;
   port: number;
@@ -107,6 +114,9 @@ export interface UdpListenerStatus {
   packetsReceived: number;
   lastPacketAt: string | null;
   lastError: string | null;
+  /** Eventos descartados por não pertencerem a nenhum firewall cadastrado. */
+  unmatchedEvents?: number;
+  unmatchedSources?: UdpUnmatchedSource[];
 }
 
 export interface ApplianceMetadata {
@@ -182,7 +192,13 @@ export type AlertCategory =
   | 'ips'
   | 'malware'
   | 'critical-log'
-  | 'suspicious-traffic';
+  | 'suspicious-traffic'
+  | 'vpn'
+  | 'license'
+  | 'resource'
+  | 'collector'
+  | 'config-change'
+  | 'auth';
 
 export interface AlertSettings {
   bandwidthUtilizationLimitPercent: number;
@@ -196,6 +212,16 @@ export interface AlertSettings {
   alertOnIps: boolean;
   alertOnCriticalLogs: boolean;
   suspiciousBlockThreshold: number;
+  /** Janela deslizante (minutos) usada para avaliar os alertas baseados em syslog. */
+  alertWindowMinutes: number;
+  cpuLimitPercent: number;
+  memoryLimitPercent: number;
+  /** Minutos sem receber syslog antes de alertar (0 desativa). */
+  silenceMinutes: number;
+  alertOnVpnDown: boolean;
+  alertOnLicense: boolean;
+  alertOnConfigChange: boolean;
+  adminLoginFailureThreshold: number;
 }
 
 export interface OverviewAlert {
@@ -211,6 +237,61 @@ export interface OverviewAlert {
   lastSeenAt?: string;
   syslogFilterQuery?: string;
   aiPrompt?: string;
+  /** Preenchidos pelo motor de alertas persistente. */
+  key?: string;
+  status?: AlertStatus;
+  firstSeenAt?: string;
+  acknowledgedBy?: string | null;
+  acknowledgedAt?: string | null;
+}
+
+export type AlertStatus = 'open' | 'acknowledged' | 'resolved';
+
+export interface AlertRecord extends OverviewAlert {
+  key: string;
+  status: AlertStatus;
+  firstSeenAt: string;
+  lastDetectedAt: string;
+  resolvedAt: string | null;
+  acknowledgedBy: string | null;
+  acknowledgedAt: string | null;
+  notifiedAt: string | null;
+}
+
+export interface NotificationPublicConfig {
+  enabled: boolean;
+  minSeverity: AlertSeverity;
+  notifyOnResolve: boolean;
+  hasWebhook: boolean;
+  hasTelegram: boolean;
+  telegramChatId: string;
+}
+
+export interface MetricSample {
+  ts: string;
+  cpuPercent: number | null;
+  memoryPercent: number | null;
+  activeConnections: number | null;
+  wanRxMbps: number;
+  wanTxMbps: number;
+}
+
+export interface ConfigChangeEntry {
+  at: string;
+  rulesAdded: number;
+  rulesRemoved: number;
+  rulesModified: number;
+  natsAdded: number;
+  natsRemoved: number;
+  natsModified: number;
+  details: string[];
+}
+
+export interface SyncStatus {
+  autoSyncMinutes: number;
+  lastAttemptAt: string | null;
+  lastError: string | null;
+  consecutiveFailures: number;
 }
 
 export interface FirewallConnectionStored {
@@ -248,6 +329,7 @@ export interface FirewallSiteSummary {
   natsCount: number;
   alertsCount: number;
   criticalAlertsCount: number;
+  sync?: SyncStatus;
   createdAt: string;
   updatedAt: string;
 }
@@ -303,6 +385,11 @@ export interface AuditOverview {
   alerts: OverviewAlert[];
   udpStatus: UdpListenerStatus;
   retention: RetentionStatus;
+  /** Quantidade de eventos recentes mantidos em memória para as análises da tela. */
+  analysisWindowSize?: number;
+  sync?: SyncStatus;
+  configChanges?: ConfigChangeEntry[];
+  hitsObservedSince?: string | null;
 }
 
 export interface RetentionStatus {
@@ -373,8 +460,34 @@ export interface FirewallSiteRecord {
   nats: NatPolicy[];
   telemetry: TelemetrySnapshot;
   alertSettings: AlertSettings;
+  /** Estado persistente dos alertas (abertos, reconhecidos e histórico). */
+  alertRecords: AlertRecord[];
+  autoSyncMinutes: number;
+  lastSyncAttemptAt: string | null;
+  lastSyncError: string | null;
+  consecutiveSyncFailures: number;
+  configChanges: ConfigChangeEntry[];
+  /** Início da janela em que os contadores de uso por syslog vêm sendo acumulados. */
+  hitsObservedSince: string | null;
+  /** Amostras de telemetria (modo JSON local; com PostgreSQL ficam na tabela metrics). */
+  metrics?: MetricSample[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface NotificationSettings {
+  enabled: boolean;
+  minSeverity: AlertSeverity;
+  notifyOnResolve: boolean;
+  webhookUrlEncrypted: string;
+  telegramBotTokenEncrypted: string;
+  telegramChatId: string;
+}
+
+export interface UdpListenerConfig {
+  enabled: boolean;
+  port: number;
+  bindAddress: string;
 }
 
 export interface DataStore {
@@ -382,4 +495,6 @@ export interface DataStore {
   activeSiteId: string;
   sites: Record<string, FirewallSiteRecord>;
   aiSettings?: AiProviderSettings;
+  notificationSettings?: NotificationSettings;
+  udpListener?: UdpListenerConfig;
 }

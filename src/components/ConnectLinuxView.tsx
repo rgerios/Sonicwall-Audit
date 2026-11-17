@@ -131,6 +131,7 @@ export function ConnectLinuxView({
   const [sitePassword, setSitePassword] = useState('');
   const [siteSavePass, setSiteSavePass] = useState(true);
   const [siteIgnoreTls, setSiteIgnoreTls] = useState(true);
+  const [siteAutoSync, setSiteAutoSync] = useState('5');
   const [siteBusy, setSiteBusy] = useState(false);
   const [syncingSiteId, setSyncingSiteId] = useState<string | null>(null);
   const [siteFeedback, setSiteFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
@@ -234,6 +235,7 @@ export function ConnectLinuxView({
     setSitePassword('');
     setSiteSavePass(true);
     setSiteIgnoreTls(true);
+    setSiteAutoSync('5');
     setSiteFeedback(null);
     setShowSiteForm(true);
   };
@@ -251,6 +253,7 @@ export function ConnectLinuxView({
     setSitePassword('');
     setSiteSavePass(site.connection.hasSavedPassword);
     setSiteIgnoreTls(site.connection.ignoreTlsErrors);
+    setSiteAutoSync(String(site.sync?.autoSyncMinutes ?? 5));
     setSiteFeedback(null);
     setShowSiteForm(true);
   };
@@ -275,6 +278,7 @@ export function ConnectLinuxView({
           savePassword: siteSavePass,
           ignoreTlsErrors: siteIgnoreTls,
         },
+        autoSyncMinutes: Math.min(1440, Math.max(0, Math.round(Number(siteAutoSync) || 0))),
       };
 
       const url = editingSiteId
@@ -749,6 +753,18 @@ export function ConnectLinuxView({
                   />
                   Ignorar TLS autoassinado
                 </label>
+                <label className="inline-flex items-center gap-2 text-[var(--fw-text-muted)]">
+                  Sincronizar a cada
+                  <input
+                    type="number"
+                    min={0}
+                    max={1440}
+                    value={siteAutoSync}
+                    onChange={(e) => setSiteAutoSync(e.target.value)}
+                    className="w-16 px-2 py-1 border border-[var(--fw-border-strong)] rounded font-mono text-right tabular-nums text-[var(--fw-heading)] bg-[var(--fw-bg-input)]"
+                  />
+                  min (0 = só manual; exige {isForti ? 'token' : 'senha'} salvo)
+                </label>
               </div>
               <button
                 type="submit"
@@ -1151,6 +1167,28 @@ export function ConnectLinuxView({
                 Pacotes recebidos nesta sessão: {udpStatus.packetsReceived.toLocaleString('pt-BR')}
                 {udpStatus.lastPacketAt ? ` · Último: ${udpStatus.lastPacketAt}` : ''}
               </p>
+            )}
+
+            {udpStatus && (udpStatus.unmatchedEvents ?? 0) > 0 && (
+              <div className="p-3 rounded-md border border-amber-300 bg-amber-50 text-xs text-amber-900 space-y-1">
+                <p className="font-semibold">
+                  {(udpStatus.unmatchedEvents ?? 0).toLocaleString('pt-BR')} evento(s) descartado(s):
+                  a origem não corresponde a nenhum firewall cadastrado.
+                </p>
+                <p>
+                  Cadastre a localidade com o mesmo IP de origem (ou sincronize via API para
+                  registrar o número de série) para que os logs sejam aceitos:
+                </p>
+                <ul className="font-mono tabular-nums">
+                  {(udpStatus.unmatchedSources ?? []).map((src) => (
+                    <li key={`${src.address}|${src.serialNumber}`}>
+                      {src.address}
+                      {src.serialNumber && src.serialNumber !== '-' ? ` · SN ${src.serialNumber}` : ''} —{' '}
+                      {src.count.toLocaleString('pt-BR')} evento(s)
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
 
             {udpFeedback && (

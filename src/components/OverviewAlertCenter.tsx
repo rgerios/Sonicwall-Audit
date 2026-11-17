@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  Activity,
   AlertOctagon,
   AlertTriangle,
   BarChart3,
   Bell,
   Bot,
   Bug,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -13,13 +15,20 @@ import {
   Radar,
   RotateCcw,
   Search,
+  Send,
   Settings2,
   ShieldAlert,
   TrendingUp,
   WifiOff,
   X,
 } from 'lucide-react';
-import type { AlertSettings, AuditOverview, FirewallVendor, OverviewAlert } from '../types.ts';
+import type {
+  AlertSettings,
+  AuditOverview,
+  FirewallVendor,
+  NotificationPublicConfig,
+  OverviewAlert,
+} from '../types.ts';
 import {
   DISMISSED_ALERTS_EVENT,
   REEVALUATE_TOASTS_EVENT,
@@ -40,7 +49,20 @@ interface OverviewAlertCenterProps {
   openConfigSignal?: number;
 }
 
-type CategoryFilter = 'all' | 'bandwidth' | 'traffic-anomaly' | 'ips-malware' | 'logs';
+type CategoryFilter = 'all' | 'bandwidth' | 'traffic-anomaly' | 'ips-malware' | 'logs' | 'infra';
+
+const INFRA_CATEGORIES = new Set(['collector', 'resource', 'vpn', 'license', 'config-change']);
+const LOG_CATEGORIES = new Set(['critical-log', 'suspicious-traffic', 'auth']);
+
+function formatAlertTime(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+const numberInputClass =
+  'w-full px-3 py-1.5 border border-[var(--fw-border-strong)] rounded font-mono tabular-nums text-[var(--fw-heading)] bg-[var(--fw-bg-input)]';
 
 function renderCategoryIcon(alert: OverviewAlert) {
   const cls =
@@ -64,6 +86,8 @@ function renderCategoryIcon(alert: OverviewAlert) {
       return <AlertOctagon className={cls} aria-hidden="true" />;
     case 'suspicious-traffic':
       return <Radar className={cls} aria-hidden="true" />;
+    default:
+      return <Activity className={cls} aria-hidden="true" />;
   }
 }
 
@@ -84,6 +108,83 @@ export function OverviewAlertCenter({
   const [draftSettings, setDraftSettings] = useState<AlertSettings>(overview.alertSettings);
   const [savingConfig, setSavingConfig] = useState(false);
   const [configFeedback, setConfigFeedback] = useState<string | null>(null);
+  const [showAcked, setShowAcked] = useState(false);
+
+  // Notificações externas (webhook / Telegram)
+  const [notifConfig, setNotifConfig] = useState<NotificationPublicConfig | null>(null);
+  const [notifWebhook, setNotifWebhook] = useState('');
+  const [notifTgToken, setNotifTgToken] = useState('');
+  const [notifTgChat, setNotifTgChat] = useState('');
+  const [notifBusy, setNotifBusy] = useState(false);
+  const [notifFeedback, setNotifFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!showConfig) return;
+    let cancelled = false;
+    void (async () => {
+      const res = await fetch(vendorApiUrl(vendor, '/notifications/config'));
+      if (res.ok && !cancelled) {
+        const data = (await res.json()) as NotificationPublicConfig;
+        setNotifConfig(data);
+        setNotifTgChat(data.telegramChatId || '');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showConfig, vendor]);
+
+  const saveNotifications = async (patch: Record<string, unknown>) => {
+    setNotifBusy(true);
+    setNotifFeedback(null);
+    try {
+      const res = await fetch(vendorApiUrl(vendor, '/notifications/config'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setNotifFeedback({ type: 'err', text: data.error || 'Erro ao salvar notificações.' });
+        return;
+      }
+      setNotifConfig(data as NotificationPublicConfig);
+      setNotifWebhook('');
+      setNotifTgToken('');
+      setNotifFeedback({ type: 'ok', text: 'Notificações salvas.' });
+    } finally {
+      setNotifBusy(false);
+    }
+  };
+
+  const testNotifications = async () => {
+    setNotifBusy(true);
+    setNotifFeedback(null);
+    try {
+      const res = await fetch(vendorApiUrl(vendor, '/notifications/test'), { method: 'POST' });
+      const data = await res.json();
+      setNotifFeedback(
+        res.ok
+          ? { type: 'ok', text: 'Mensagem de teste enviada.' }
+          : { type: 'err', text: data.error || 'Falha no envio de teste.' }
+      );
+    } finally {
+      setNotifBusy(false);
+    }
+  };
+
+  const setAck = async (alert: OverviewAlert, acknowledge: boolean) => {
+    if (!alert.key) return;
+    const res = await fetch(vendorApiUrl(vendor, acknowledge ? '/alerts/ack' : '/alerts/unack'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: alert.key }),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as { overview?: AuditOverview };
+      if (data.overview) onOverviewUpdated(data.overview);
+    }
+  };
 
   useEffect(() => {
     setDismissedKeys(loadDismissedAlertKeys(vendor));
@@ -119,10 +220,14 @@ export function OverviewAlertCenter({
 
   const allAlerts = overview.alerts ?? [];
   const dismissedSet = new Set(dismissedKeys);
-  const activeAlerts = allAlerts.filter((a) => !dismissedSet.has(getAlertFingerprint(a)));
-  const dismissedActiveCount = allAlerts.length - activeAlerts.length;
+  // Reconhecidos (no servidor, valem para todos os usuários) saem da lista principal
+  const ackedAlerts = allAlerts.filter((a) => a.status === 'acknowledged');
+  const openAlerts = allAlerts.filter((a) => a.status !== 'acknowledged');
+  const activeAlerts = openAlerts.filter((a) => !dismissedSet.has(getAlertFingerprint(a)));
+  const dismissedActiveCount = openAlerts.length - activeAlerts.length;
+  const listedAlerts = showAcked ? [...activeAlerts, ...ackedAlerts] : activeAlerts;
 
-  const filteredAlerts = activeAlerts.filter((a) => {
+  const filteredAlerts = listedAlerts.filter((a) => {
     if (categoryFilter === 'all') return true;
     if (categoryFilter === 'bandwidth') {
       return a.category === 'bandwidth' || a.category === 'link-down';
@@ -133,7 +238,8 @@ export function OverviewAlertCenter({
     if (categoryFilter === 'ips-malware') {
       return a.category === 'ips' || a.category === 'malware';
     }
-    return a.category === 'critical-log' || a.category === 'suspicious-traffic';
+    if (categoryFilter === 'infra') return INFRA_CATEGORIES.has(a.category);
+    return LOG_CATEGORIES.has(a.category);
   });
 
   const criticalCount = activeAlerts.filter((a) => a.severity === 'critical').length;
@@ -142,6 +248,10 @@ export function OverviewAlertCenter({
   const visibleAlerts = showAllAlerts ? filteredAlerts : filteredAlerts.slice(0, 4);
 
   const handleDismiss = (alert: OverviewAlert) => {
+    if (alert.key) {
+      void setAck(alert, true);
+      return;
+    }
     const key = getAlertFingerprint(alert);
     setDismissedKeys(dismissAlertKey(vendor, key));
   };
@@ -268,6 +378,16 @@ export function OverviewAlertCenter({
               Reexibir {dismissedActiveCount} silenciado(s)
             </button>
           )}
+          {ackedAlerts.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowAcked((v) => !v)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-bg)] whitespace-nowrap"
+            >
+              <Check className="w-3.5 h-3.5" />
+              {showAcked ? 'Ocultar' : 'Ver'} {ackedAlerts.length} reconhecido(s)
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setShowConfig((v) => !v)}
@@ -384,8 +504,8 @@ export function OverviewAlertCenter({
                 <input
                   type="number"
                   min={0}
-                  max={500000}
-                  step={5}
+                  max={100000000}
+                  step={1000}
                   value={draftSettings.hourlyLogVolumeLimit}
                   onChange={(e) =>
                     setDraftSettings((s) => ({
@@ -436,7 +556,7 @@ export function OverviewAlertCenter({
                   onChange={(e) =>
                     setDraftSettings((s) => ({
                       ...s,
-                      anomalySpikeMultiplier: Math.max(1.2, Number(e.target.value) || 2.5),
+                      anomalySpikeMultiplier: Math.max(1.2, Number(e.target.value) || 3),
                     }))
                   }
                   className="w-full px-3 py-1.5 border border-[var(--fw-border-strong)] rounded font-mono tabular-nums text-[var(--fw-heading)] bg-[var(--fw-bg-input)] disabled:opacity-50"
@@ -470,7 +590,7 @@ export function OverviewAlertCenter({
                 <input
                   type="number"
                   min={0}
-                  max={100}
+                  max={10000}
                   step={1}
                   disabled={!draftSettings.anomalyDetectionEnabled}
                   value={draftSettings.portScanUniquePortsThreshold}
@@ -491,7 +611,7 @@ export function OverviewAlertCenter({
                 <input
                   type="number"
                   min={1}
-                  max={100}
+                  max={1000000}
                   value={draftSettings.suspiciousBlockThreshold}
                   onChange={(e) =>
                     setDraftSettings((s) => ({
@@ -503,6 +623,254 @@ export function OverviewAlertCenter({
                 />
               </label>
             </div>
+          </div>
+
+          <div className="pt-3 border-t border-[var(--fw-border-soft)] space-y-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--fw-text-subtle)]">
+              3. Saúde do Firewall e da Coleta
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 text-xs">
+              <label className="block space-y-1.5">
+                <span className="font-medium text-[var(--fw-text-body)]">Janela de Análise (min)</span>
+                <input
+                  type="number"
+                  min={5}
+                  max={1440}
+                  step={5}
+                  value={draftSettings.alertWindowMinutes}
+                  onChange={(e) =>
+                    setDraftSettings((s) => ({ ...s, alertWindowMinutes: Math.max(0, Number(e.target.value) || 0) }))
+                  }
+                  className={numberInputClass}
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <span className="font-medium text-[var(--fw-text-body)]">CPU (%, 0 = off)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={draftSettings.cpuLimitPercent}
+                  onChange={(e) =>
+                    setDraftSettings((s) => ({ ...s, cpuLimitPercent: Math.max(0, Number(e.target.value) || 0) }))
+                  }
+                  className={numberInputClass}
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <span className="font-medium text-[var(--fw-text-body)]">Memória (%, 0 = off)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={draftSettings.memoryLimitPercent}
+                  onChange={(e) =>
+                    setDraftSettings((s) => ({ ...s, memoryLimitPercent: Math.max(0, Number(e.target.value) || 0) }))
+                  }
+                  className={numberInputClass}
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <span className="font-medium text-[var(--fw-text-body)]">Sem Logs há (min, 0 = off)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={1440}
+                  step={1}
+                  value={draftSettings.silenceMinutes}
+                  onChange={(e) =>
+                    setDraftSettings((s) => ({ ...s, silenceMinutes: Math.max(0, Number(e.target.value) || 0) }))
+                  }
+                  className={numberInputClass}
+                />
+              </label>
+              <label className="block space-y-1.5">
+                <span className="font-medium text-[var(--fw-text-body)]">Falhas de Login (0 = off)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={10000}
+                  step={1}
+                  value={draftSettings.adminLoginFailureThreshold}
+                  onChange={(e) =>
+                    setDraftSettings((s) => ({ ...s, adminLoginFailureThreshold: Math.max(0, Number(e.target.value) || 0) }))
+                  }
+                  className={numberInputClass}
+                />
+              </label>
+            </div>
+            <div className="flex flex-wrap items-center gap-5 text-xs">
+              <label className="inline-flex items-center gap-2 text-[var(--fw-text-body)] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={draftSettings.alertOnVpnDown}
+                  onChange={(e) => setDraftSettings((s) => ({ ...s, alertOnVpnDown: e.target.checked }))}
+                  className="rounded border-[var(--fw-border-strong)] accent-[var(--fw-accent)]"
+                />
+                Túnel VPN fora do ar
+              </label>
+              <label className="inline-flex items-center gap-2 text-[var(--fw-text-body)] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={draftSettings.alertOnLicense}
+                  onChange={(e) => setDraftSettings((s) => ({ ...s, alertOnLicense: e.target.checked }))}
+                  className="rounded border-[var(--fw-border-strong)] accent-[var(--fw-accent)]"
+                />
+                Licença vencida ou vencendo
+              </label>
+              <label className="inline-flex items-center gap-2 text-[var(--fw-text-body)] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={draftSettings.alertOnConfigChange}
+                  onChange={(e) => setDraftSettings((s) => ({ ...s, alertOnConfigChange: e.target.checked }))}
+                  className="rounded border-[var(--fw-border-strong)] accent-[var(--fw-accent)]"
+                />
+                Mudança de regras / NAT entre coletas
+              </label>
+            </div>
+          </div>
+
+          <div className="pt-3 border-t border-[var(--fw-border-soft)] space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--fw-text-subtle)]">
+                4. Notificações Externas (todos os firewalls)
+              </p>
+              {notifFeedback && (
+                <span
+                  className={`text-xs font-medium ${
+                    notifFeedback.type === 'ok' ? 'text-emerald-800' : 'text-red-700'
+                  }`}
+                >
+                  {notifFeedback.text}
+                </span>
+              )}
+            </div>
+            {notifConfig ? (
+              <div className="space-y-3 text-xs">
+                <div className="flex flex-wrap items-center gap-5">
+                  <label className="inline-flex items-center gap-2 font-medium text-[var(--fw-heading)] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={notifConfig.enabled}
+                      disabled={notifBusy}
+                      onChange={(e) => void saveNotifications({ enabled: e.target.checked })}
+                      className="rounded border-[var(--fw-border-strong)] accent-[var(--fw-accent)]"
+                    />
+                    Enviar novos alertas para os canais abaixo
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-[var(--fw-text-body)]">
+                    Severidade mínima
+                    <select
+                      value={notifConfig.minSeverity}
+                      disabled={notifBusy}
+                      onChange={(e) => void saveNotifications({ minSeverity: e.target.value })}
+                      className="px-2 py-1 border border-[var(--fw-border-strong)] rounded bg-[var(--fw-bg-input)] text-[var(--fw-heading)]"
+                    >
+                      <option value="critical">Somente críticos</option>
+                      <option value="warning">Críticos e avisos</option>
+                    </select>
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-[var(--fw-text-body)] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={notifConfig.notifyOnResolve}
+                      disabled={notifBusy}
+                      onChange={(e) => void saveNotifications({ notifyOnResolve: e.target.checked })}
+                      className="rounded border-[var(--fw-border-strong)] accent-[var(--fw-accent)]"
+                    />
+                    Avisar quando resolver
+                  </label>
+                </div>
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                  <label className="block space-y-1.5">
+                    <span className="font-medium text-[var(--fw-text-body)]">
+                      Webhook (Slack, Teams, Discord, n8n){' '}
+                      {notifConfig.hasWebhook && <span className="text-emerald-800">· configurado</span>}
+                    </span>
+                    <input
+                      type="url"
+                      value={notifWebhook}
+                      onChange={(e) => setNotifWebhook(e.target.value)}
+                      placeholder={notifConfig.hasWebhook ? 'Informe para substituir' : 'https://...'}
+                      className={numberInputClass}
+                    />
+                  </label>
+                  <label className="block space-y-1.5">
+                    <span className="font-medium text-[var(--fw-text-body)]">
+                      Telegram: token do bot{' '}
+                      {notifConfig.hasTelegram && <span className="text-emerald-800">· configurado</span>}
+                    </span>
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      value={notifTgToken}
+                      onChange={(e) => setNotifTgToken(e.target.value)}
+                      placeholder={notifConfig.hasTelegram ? 'Informe para substituir' : '123456:ABC...'}
+                      className={numberInputClass}
+                    />
+                  </label>
+                  <label className="block space-y-1.5">
+                    <span className="font-medium text-[var(--fw-text-body)]">Telegram: chat ID</span>
+                    <input
+                      type="text"
+                      value={notifTgChat}
+                      onChange={(e) => setNotifTgChat(e.target.value)}
+                      placeholder="-1001234567890"
+                      className={numberInputClass}
+                    />
+                  </label>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={notifBusy}
+                    onClick={() =>
+                      void saveNotifications({
+                        webhookUrl: notifWebhook,
+                        telegramBotToken: notifTgToken,
+                        telegramChatId: notifTgChat,
+                      })
+                    }
+                    className="px-3 py-1.5 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] disabled:opacity-50"
+                  >
+                    Salvar Canais
+                  </button>
+                  <button
+                    type="button"
+                    disabled={notifBusy || (!notifConfig.hasWebhook && !notifConfig.hasTelegram)}
+                    onClick={() => void testNotifications()}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-bg)] disabled:opacity-50"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    Enviar Teste
+                  </button>
+                  {notifConfig.hasWebhook && (
+                    <button
+                      type="button"
+                      disabled={notifBusy}
+                      onClick={() => void saveNotifications({ clearWebhook: true })}
+                      className="px-3 py-1.5 text-xs font-medium text-red-700 hover:underline"
+                    >
+                      Remover webhook
+                    </button>
+                  )}
+                  {notifConfig.hasTelegram && (
+                    <button
+                      type="button"
+                      disabled={notifBusy}
+                      onClick={() => void saveNotifications({ clearTelegram: true })}
+                      className="px-3 py-1.5 text-xs font-medium text-red-700 hover:underline"
+                    >
+                      Remover Telegram
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-[var(--fw-text-muted)]">Carregando configuração...</p>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-4 pt-3 border-t border-[var(--fw-border-soft)] text-xs">
@@ -544,7 +912,7 @@ export function OverviewAlertCenter({
         </div>
       )}
 
-      {hasAnyAlert && (
+      {listedAlerts.length > 0 && (
         <>
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
             {(
@@ -564,7 +932,11 @@ export function OverviewAlertCenter({
                 },
                 {
                   id: 'logs',
-                  label: `Falhas & Suspeitos (${activeAlerts.filter((a) => a.category === 'critical-log' || a.category === 'suspicious-traffic').length})`,
+                  label: `Falhas & Suspeitos (${activeAlerts.filter((a) => LOG_CATEGORIES.has(a.category)).length})`,
+                },
+                {
+                  id: 'infra',
+                  label: `Infra & Coleta (${activeAlerts.filter((a) => INFRA_CATEGORIES.has(a.category)).length})`,
                 },
               ] as Array<{ id: CategoryFilter; label: string }>
             ).map((tab) => (
@@ -591,11 +963,12 @@ export function OverviewAlertCenter({
             <div className="space-y-2">
               {visibleAlerts.map((alert) => {
                 const isCritical = alert.severity === 'critical';
+                const isAcked = alert.status === 'acknowledged';
                 return (
                   <div
-                    key={alert.id}
+                    key={alert.key ?? alert.id}
                     className={`bg-white border rounded-md px-4 py-3 flex flex-wrap items-start justify-between gap-3 ${
-                      isCritical ? 'border-red-300' : 'border-amber-300'
+                      isAcked ? 'border-[var(--fw-border)] opacity-70' : isCritical ? 'border-red-300' : 'border-amber-300'
                     }`}
                   >
                     <div className="flex items-start gap-3 min-w-0 flex-1">
@@ -621,15 +994,22 @@ export function OverviewAlertCenter({
                           <span className="font-mono tabular-nums font-semibold text-[var(--fw-heading)]">
                             {alert.metricValue}
                           </span>
-                          {alert.lastSeenAt && (
+                          {(alert.firstSeenAt || alert.lastSeenAt) && (
                             <>
                               <span className="text-[var(--fw-text-faint)]" aria-hidden="true">
                                 ·
                               </span>
                               <span className="font-mono text-[11px] text-[var(--fw-text-subtle)] tabular-nums">
-                                {alert.lastSeenAt}
+                                {alert.firstSeenAt
+                                  ? `desde ${formatAlertTime(alert.firstSeenAt)}`
+                                  : alert.lastSeenAt}
                               </span>
                             </>
+                          )}
+                          {isAcked && (
+                            <span className="text-[11px] font-medium text-[var(--fw-text-subtle)]">
+                              · reconhecido por {alert.acknowledgedBy || 'admin'}
+                            </span>
                           )}
                         </div>
                         <p className="text-xs font-semibold text-[var(--fw-heading)]">
@@ -675,15 +1055,27 @@ export function OverviewAlertCenter({
                           Ajustar Critério
                         </button>
                       )}
-                      <button
-                        type="button"
-                        onClick={() => handleDismiss(alert)}
-                        title="Silenciar este alerta"
-                        aria-label={`Silenciar ${alert.title}`}
-                        className="p-1.5 text-[var(--fw-text-subtle)] hover:text-[var(--fw-heading)] hover:bg-[var(--fw-surface)] rounded"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
+                      {isAcked ? (
+                        <button
+                          type="button"
+                          onClick={() => void setAck(alert, false)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded hover:bg-[var(--fw-surface)] whitespace-nowrap"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          Reabrir
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleDismiss(alert)}
+                          title="Reconhecer: sai da lista até ser resolvido (vale para todos os usuários)"
+                          aria-label={`Reconhecer ${alert.title}`}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded hover:bg-[var(--fw-surface)] whitespace-nowrap"
+                        >
+                          {alert.key ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
+                          Reconhecer
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
