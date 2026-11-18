@@ -48,6 +48,7 @@ export function SyslogView({
   const [actionFilter, setActionFilter] = useState('all');
   const [severityFilter, setSeverityFilter] = useState('all');
   const [deviceFilter, setDeviceFilter] = useState('all');
+  const [minutesFilter, setMinutesFilter] = useState('15');
 
   const [appliedFilters, setAppliedFilters] = useState({
     q: '',
@@ -56,6 +57,7 @@ export function SyslogView({
     action: 'all',
     severity: 'all',
     device: 'all',
+    minutes: '15',
   });
   const [devices, setDevices] = useState<Array<{ id: string; label: string }>>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -76,7 +78,16 @@ export function SyslogView({
     setActionFilter('all');
     setSeverityFilter('all');
     setDeviceFilter('all');
-    setAppliedFilters({ q: '', srcIp: '', dstIp: '', action: 'all', severity: 'all', device: 'all' });
+    setMinutesFilter('15');
+    setAppliedFilters({
+      q: '',
+      srcIp: '',
+      dstIp: '',
+      action: 'all',
+      severity: 'all',
+      device: 'all',
+      minutes: '15',
+    });
     setDevices([]);
     setFeedback(null);
   }, [vendor]);
@@ -89,14 +100,15 @@ export function SyslogView({
       setActionFilter('all');
       setSeverityFilter('all');
       setDeviceFilter('all');
-      setAppliedFilters({
+      setAppliedFilters((prev) => ({
         q: pendingQuery,
         srcIp: '',
         dstIp: '',
         action: 'all',
         severity: 'all',
         device: 'all',
-      });
+        minutes: prev.minutes,
+      }));
       onConsumePendingQuery?.();
     }
   }, [pendingQuery, onConsumePendingQuery]);
@@ -115,6 +127,7 @@ export function SyslogView({
         action: filters.action,
         severity: filters.severity,
         device: filters.device,
+        minutes: filters.minutes,
         limit: String(PAGE_SIZE),
         offset: String(offset),
       });
@@ -152,6 +165,7 @@ export function SyslogView({
       action: actionFilter,
       severity: severityFilter,
       device: deviceFilter,
+      minutes: minutesFilter,
     });
   };
 
@@ -162,7 +176,16 @@ export function SyslogView({
     setActionFilter('all');
     setSeverityFilter('all');
     setDeviceFilter('all');
-    setAppliedFilters({ q: '', srcIp: '', dstIp: '', action: 'all', severity: 'all', device: 'all' });
+    setMinutesFilter('15');
+    setAppliedFilters({
+      q: '',
+      srcIp: '',
+      dstIp: '',
+      action: 'all',
+      severity: 'all',
+      device: 'all',
+      minutes: '15',
+    });
   };
 
   const hasPendingFilterChanges =
@@ -171,9 +194,19 @@ export function SyslogView({
     dstIpFilter.trim() !== appliedFilters.dstIp ||
     actionFilter !== appliedFilters.action ||
     severityFilter !== appliedFilters.severity ||
-    deviceFilter !== appliedFilters.device;
+    deviceFilter !== appliedFilters.device ||
+    minutesFilter !== appliedFilters.minutes;
 
-  const activeFilterChips: string[] = [];
+  const periodLabel = (m: string) => {
+    if (m === '15') return 'Últimos 15 min';
+    if (m === '30') return 'Últimos 30 min';
+    if (m === '60') return 'Última 1 hora';
+    if (m === '360') return 'Últimas 6 horas';
+    if (m === '1440') return 'Últimas 24 horas';
+    return 'Todo o histórico';
+  };
+
+  const activeFilterChips: string[] = [`Período: ${periodLabel(appliedFilters.minutes)}`];
   if (appliedFilters.q) activeFilterChips.push(`Busca: "${appliedFilters.q}"`);
   if (appliedFilters.srcIp) activeFilterChips.push(`Origem: ${appliedFilters.srcIp}`);
   if (appliedFilters.dstIp) activeFilterChips.push(`Destino: ${appliedFilters.dstIp}`);
@@ -316,14 +349,15 @@ export function SyslogView({
           setActionFilter('all');
           setSeverityFilter('all');
           setDeviceFilter('all');
-          setAppliedFilters({
+          setAppliedFilters((prev) => ({
             q: ip,
             srcIp: '',
             dstIp: '',
             action: 'all',
             severity: 'all',
             device: 'all',
-          });
+            minutes: prev.minutes,
+          }));
         }}
       />
 
@@ -409,6 +443,20 @@ export function SyslogView({
                 {dev.label}
               </option>
             ))}
+          </select>
+
+          <select
+            value={minutesFilter}
+            onChange={(e) => setMinutesFilter(e.target.value)}
+            aria-label="Filtrar por período"
+            className="px-3 py-2 text-xs font-medium border border-[var(--fw-border-strong)] rounded-md bg-white text-[var(--fw-text-body)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
+          >
+            <option value="15">Últimos 15 min</option>
+            <option value="30">Últimos 30 min</option>
+            <option value="60">Última 1 hora</option>
+            <option value="360">Últimas 6 horas</option>
+            <option value="1440">Últimas 24 horas</option>
+            <option value="0">Todo o histórico</option>
           </select>
 
           <button

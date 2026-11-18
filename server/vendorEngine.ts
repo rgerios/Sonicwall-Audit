@@ -1890,6 +1890,9 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
       const action = String(req.query.action || 'all').toLowerCase();
       const severity = String(req.query.severity || 'all').toLowerCase();
       const device = String(req.query.device || 'all').trim();
+      const minutesRaw = Number(req.query.minutes ?? 0);
+      const minutes = Number.isFinite(minutesRaw) && minutesRaw > 0 ? Math.min(43200, Math.floor(minutesRaw)) : 0;
+      const sinceIso = minutes > 0 ? new Date(Date.now() - minutes * 60 * 1000).toISOString() : undefined;
       const limit = Math.min(1000, Math.max(10, Number(req.query.limit || 250)));
       const offset = Math.max(0, Math.floor(Number(req.query.offset || 0)) || 0);
       const total = getRuntime(site).total;
@@ -1917,6 +1920,7 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
           action,
           severity,
           device,
+          sinceIso,
           limit,
           offset,
         });
@@ -1933,6 +1937,7 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
           }
         }
         if (severity !== 'all' && ev.severity !== severity) return false;
+        if (sinceIso && ev.ingestedAt && ev.ingestedAt < sinceIso) return false;
         if (device !== 'all' && ev.firewallHost !== device && ev.serialNumber !== device) {
           return false;
         }

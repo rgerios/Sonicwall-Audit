@@ -45,6 +45,7 @@ export interface SyslogQuery {
   action?: string;
   severity?: string;
   device?: string;
+  sinceIso?: string;
   limit: number;
   offset: number;
 }
@@ -760,6 +761,11 @@ export class PostgresStore {
     const pool = this.getPool();
     const where: string[] = ['site_id = $1'];
     const params: unknown[] = [siteId];
+
+    if (q.sinceIso) {
+      params.push(q.sinceIso);
+      where.push(`ingested_at >= $${params.length}`);
+    }
 
     if (q.action && q.action !== 'all') {
       if (q.action === 'blocked') {
