@@ -6,10 +6,13 @@ import {
   ChevronDown,
   ChevronRight,
   FileUp,
+  Filter,
   Info,
+  Loader2,
   RefreshCw,
   RotateCcw,
   Search,
+  X,
 } from 'lucide-react';
 import type { FirewallVendor, SyslogEvent } from '../types.ts';
 import { vendorApiUrl } from '../utils/vendorApi.ts';
@@ -40,9 +43,20 @@ export function SyslogView({
   const [loading, setLoading] = useState(true);
 
   const [query, setQuery] = useState('');
+  const [srcIpFilter, setSrcIpFilter] = useState('');
+  const [dstIpFilter, setDstIpFilter] = useState('');
   const [actionFilter, setActionFilter] = useState('all');
   const [severityFilter, setSeverityFilter] = useState('all');
   const [deviceFilter, setDeviceFilter] = useState('all');
+
+  const [appliedFilters, setAppliedFilters] = useState({
+    q: '',
+    srcIp: '',
+    dstIp: '',
+    action: 'all',
+    severity: 'all',
+    device: 'all',
+  });
   const [devices, setDevices] = useState<Array<{ id: string; label: string }>>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -56,7 +70,13 @@ export function SyslogView({
   useEffect(() => {
     setExpandedId(null);
     setConfirmReset(false);
+    setQuery('');
+    setSrcIpFilter('');
+    setDstIpFilter('');
+    setActionFilter('all');
+    setSeverityFilter('all');
     setDeviceFilter('all');
+    setAppliedFilters({ q: '', srcIp: '', dstIp: '', action: 'all', severity: 'all', device: 'all' });
     setDevices([]);
     setFeedback(null);
   }, [vendor]);
@@ -64,8 +84,19 @@ export function SyslogView({
   useEffect(() => {
     if (pendingQuery) {
       setQuery(pendingQuery);
+      setSrcIpFilter('');
+      setDstIpFilter('');
       setActionFilter('all');
       setSeverityFilter('all');
+      setDeviceFilter('all');
+      setAppliedFilters({
+        q: pendingQuery,
+        srcIp: '',
+        dstIp: '',
+        action: 'all',
+        severity: 'all',
+        device: 'all',
+      });
       onConsumePendingQuery?.();
     }
   }, [pendingQuery, onConsumePendingQuery]);
@@ -73,15 +104,17 @@ export function SyslogView({
   const PAGE_SIZE = 250;
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const fetchLogs = async (offset = 0) => {
+  const fetchLogs = async (offset = 0, filters = appliedFilters) => {
     if (offset === 0) setLoading(true);
     else setLoadingMore(true);
     try {
       const params = new URLSearchParams({
-        q: query,
-        action: actionFilter,
-        severity: severityFilter,
-        device: deviceFilter,
+        q: filters.q,
+        srcIp: filters.srcIp,
+        dstIp: filters.dstIp,
+        action: filters.action,
+        severity: filters.severity,
+        device: filters.device,
         limit: String(PAGE_SIZE),
         offset: String(offset),
       });
@@ -107,8 +140,54 @@ export function SyslogView({
   };
 
   useEffect(() => {
-    void fetchLogs();
-  }, [vendor, query, actionFilter, severityFilter, deviceFilter, refreshToken]);
+    void fetchLogs(0, appliedFilters);
+  }, [vendor, appliedFilters, refreshToken]);
+
+  const handleApplyFilters = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    setAppliedFilters({
+      q: query.trim(),
+      srcIp: srcIpFilter.trim(),
+      dstIp: dstIpFilter.trim(),
+      action: actionFilter,
+      severity: severityFilter,
+      device: deviceFilter,
+    });
+  };
+
+  const handleClearFilters = () => {
+    setQuery('');
+    setSrcIpFilter('');
+    setDstIpFilter('');
+    setActionFilter('all');
+    setSeverityFilter('all');
+    setDeviceFilter('all');
+    setAppliedFilters({ q: '', srcIp: '', dstIp: '', action: 'all', severity: 'all', device: 'all' });
+  };
+
+  const hasPendingFilterChanges =
+    query.trim() !== appliedFilters.q ||
+    srcIpFilter.trim() !== appliedFilters.srcIp ||
+    dstIpFilter.trim() !== appliedFilters.dstIp ||
+    actionFilter !== appliedFilters.action ||
+    severityFilter !== appliedFilters.severity ||
+    deviceFilter !== appliedFilters.device;
+
+  const activeFilterChips: string[] = [];
+  if (appliedFilters.q) activeFilterChips.push(`Busca: "${appliedFilters.q}"`);
+  if (appliedFilters.srcIp) activeFilterChips.push(`Origem: ${appliedFilters.srcIp}`);
+  if (appliedFilters.dstIp) activeFilterChips.push(`Destino: ${appliedFilters.dstIp}`);
+  if (appliedFilters.action !== 'all') {
+    const actionLabel =
+      appliedFilters.action === 'allow'
+        ? 'Permitidos'
+        : appliedFilters.action === 'blocked'
+          ? 'Bloqueados'
+          : 'Sistema';
+    activeFilterChips.push(`Ação: ${actionLabel}`);
+  }
+  if (appliedFilters.severity !== 'all') activeFilterChips.push(`Severidade: ${appliedFilters.severity}`);
+  if (appliedFilters.device !== 'all') activeFilterChips.push(`Device: ${appliedFilters.device}`);
 
   const handleFileUpload = async (file: File | undefined) => {
     if (!file) return;
@@ -232,23 +311,55 @@ export function SyslogView({
         refreshToken={refreshToken}
         onFilterSyslogsByIp={(ip) => {
           setQuery(ip);
+          setSrcIpFilter('');
+          setDstIpFilter('');
           setActionFilter('all');
           setSeverityFilter('all');
+          setDeviceFilter('all');
+          setAppliedFilters({
+            q: ip,
+            srcIp: '',
+            dstIp: '',
+            action: 'all',
+            severity: 'all',
+            device: 'all',
+          });
         }}
       />
 
-      <div className="bg-white border border-[var(--fw-border)] rounded-lg p-4 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-3 flex-1 min-w-[260px]">
-          <div className="relative flex-1 min-w-[220px] max-w-md">
+      <form
+        onSubmit={handleApplyFilters}
+        className="bg-white border border-[var(--fw-border)] rounded-lg p-4 space-y-3"
+      >
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="relative flex-1 min-w-[200px]">
             <Search className="w-4 h-4 text-[var(--fw-text-subtle)] absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Filtrar IP, porta, regra, mensagem..."
+              placeholder="Busca geral (porta, regra, mensagem...)"
               className="w-full pl-9 pr-3 py-2 text-xs border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
             />
           </div>
+
+          <input
+            type="text"
+            value={srcIpFilter}
+            onChange={(e) => setSrcIpFilter(e.target.value)}
+            placeholder="IP Origem (ex: 10.20.4.45)"
+            aria-label="Filtrar por IP de origem"
+            className="w-44 px-3 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
+          />
+
+          <input
+            type="text"
+            value={dstIpFilter}
+            onChange={(e) => setDstIpFilter(e.target.value)}
+            placeholder="IP Destino (ex: 8.8.8.8)"
+            aria-label="Filtrar por IP de destino"
+            className="w-44 px-3 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
+          />
 
           <div className="flex items-center gap-1 p-1 bg-[var(--fw-surface-alt)] rounded-md">
             {[
@@ -261,7 +372,7 @@ export function SyslogView({
                 key={tab.id}
                 type="button"
                 onClick={() => setActionFilter(tab.id)}
-                className={`px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap ${
+                className={`px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap cursor-pointer ${
                   actionFilter === tab.id
                     ? 'bg-white text-[var(--fw-heading)] shadow-xs'
                     : 'text-[var(--fw-text-body)] hover:text-[var(--fw-heading)]'
@@ -290,7 +401,7 @@ export function SyslogView({
             value={deviceFilter}
             onChange={(e) => setDeviceFilter(e.target.value)}
             aria-label="Filtrar por device"
-            className="px-3 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-white text-[var(--fw-text-body)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)] max-w-[220px]"
+            className="px-3 py-2 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-white text-[var(--fw-text-body)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)] max-w-[210px]"
           >
             <option value="all">Todos os devices</option>
             {devices.map((dev) => (
@@ -299,9 +410,57 @@ export function SyslogView({
               </option>
             ))}
           </select>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white rounded-md transition-colors cursor-pointer disabled:opacity-50 whitespace-nowrap ${
+              hasPendingFilterChanges
+                ? 'bg-[var(--fw-accent)] hover:bg-[var(--fw-accent-hover)] ring-2 ring-[var(--fw-accent-mid)]/40'
+                : 'bg-[var(--fw-accent)] hover:bg-[var(--fw-accent-hover)]'
+            }`}
+          >
+            <Filter className="w-3.5 h-3.5" />
+            Aplicar Filtro
+          </button>
+
+          {(activeFilterChips.length > 0 || hasPendingFilterChanges) && (
+            <button
+              type="button"
+              onClick={handleClearFilters}
+              className="inline-flex items-center gap-1 px-2.5 py-2 text-xs font-medium text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] cursor-pointer whitespace-nowrap"
+            >
+              <X className="w-3.5 h-3.5" />
+              Limpar
+            </button>
+          )}
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[var(--fw-border-soft)]">
+          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+            <span className="text-[var(--fw-text-muted)] font-medium">Filtrando por:</span>
+            {activeFilterChips.length === 0 ? (
+              <span className="px-2 py-0.5 rounded bg-[var(--fw-surface)] text-[var(--fw-text-body)]">
+                Sem filtro (exibindo logs mais recentes)
+              </span>
+            ) : (
+              activeFilterChips.map((chip) => (
+                <span
+                  key={chip}
+                  className="px-2 py-0.5 rounded bg-[var(--fw-surface-chip)] text-[var(--fw-heading)] font-mono font-medium"
+                >
+                  {chip}
+                </span>
+              ))
+            )}
+            {hasPendingFilterChanges && (
+              <span className="text-amber-800 font-medium ml-1">
+                (alterações pendentes — clique em Aplicar Filtro)
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
           <label className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] cursor-pointer whitespace-nowrap">
             <FileUp className="w-3.5 h-3.5" />
             Importar .log/.txt
@@ -369,7 +528,8 @@ export function SyslogView({
             </div>
           )}
         </div>
-      </div>
+        </div>
+      </form>
 
       {feedback && (
         <div
@@ -431,10 +591,22 @@ export function SyslogView({
         </div>
 
         {loading ? (
-          <div className="p-6 space-y-2 animate-pulse">
-            {[1, 2, 3, 4, 5].map((n) => (
-              <div key={n} className="h-9 bg-[var(--fw-surface)] rounded" />
-            ))}
+          <div className="p-8 space-y-4">
+            <div className="flex items-center justify-center gap-3 text-sm font-medium text-[var(--fw-heading)]">
+              <Loader2 className="w-5 h-5 animate-spin text-[var(--fw-accent)]" />
+              <span>
+                Carregando syslogs {theme.label}
+                {activeFilterChips.length > 0 ? ' com os filtros aplicados...' : '...'}
+              </span>
+            </div>
+            <p className="text-center text-xs text-[var(--fw-text-muted)]">
+              Consultando registros armazenados ({total.toLocaleString('pt-BR')} eventos no total). Aguarde...
+            </p>
+            <div className="space-y-2 animate-pulse max-w-4xl mx-auto">
+              {[1, 2, 3, 4, 5].map((n) => (
+                <div key={n} className="h-9 bg-[var(--fw-surface)] rounded" />
+              ))}
+            </div>
           </div>
         ) : events.length === 0 ? (
           <div className="p-10 text-center">
@@ -490,7 +662,11 @@ export function SyslogView({
                               const id =
                                 (ev.firewallHost && ev.firewallHost !== '-' ? ev.firewallHost : '') ||
                                 (ev.serialNumber && ev.serialNumber !== '-' ? ev.serialNumber : '');
-                              if (id) setDeviceFilter(deviceFilter === id ? 'all' : id);
+                              if (id) {
+                                const nextDevice = appliedFilters.device === id ? 'all' : id;
+                                setDeviceFilter(nextDevice);
+                                setAppliedFilters((prev) => ({ ...prev, device: nextDevice }));
+                              }
                             }}
                             title="Clique para filtrar apenas este device"
                             className="text-left hover:underline cursor-pointer"

@@ -1885,6 +1885,8 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
     asyncRoute(async (req, res) => {
       const site = siteFor(req);
       const search = String(req.query.q || '').trim().toLowerCase();
+      const srcIp = String(req.query.srcIp || '').trim().toLowerCase();
+      const dstIp = String(req.query.dstIp || '').trim().toLowerCase();
       const action = String(req.query.action || 'all').toLowerCase();
       const severity = String(req.query.severity || 'all').toLowerCase();
       const device = String(req.query.device || 'all').trim();
@@ -1910,6 +1912,8 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
         await flushPendingInserts();
         const result = await pgStore.querySyslogs(site.id, {
           search,
+          srcIp,
+          dstIp,
           action,
           severity,
           device,
@@ -1932,6 +1936,8 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
         if (device !== 'all' && ev.firewallHost !== device && ev.serialNumber !== device) {
           return false;
         }
+        if (srcIp && !ev.srcIp.toLowerCase().includes(srcIp)) return false;
+        if (dstIp && !ev.dstIp.toLowerCase().includes(dstIp)) return false;
         if (search && !buildSyslogSearchText(ev).includes(search)) return false;
         return true;
       });

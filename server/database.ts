@@ -40,6 +40,8 @@ export interface SyslogStats {
 
 export interface SyslogQuery {
   search?: string;
+  srcIp?: string;
+  dstIp?: string;
   action?: string;
   severity?: string;
   device?: string;
@@ -781,6 +783,16 @@ export class PostgresStore {
       const escaped = q.search.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
       params.push(`%${escaped}%`);
       where.push(`search_text LIKE $${params.length}`);
+    }
+    if (q.srcIp) {
+      const escaped = q.srcIp.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
+      params.push(`%${escaped}%`);
+      where.push(`LOWER(COALESCE(payload_json->>'srcIp', '')) LIKE $${params.length}`);
+    }
+    if (q.dstIp) {
+      const escaped = q.dstIp.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
+      params.push(`%${escaped}%`);
+      where.push(`LOWER(COALESCE(payload_json->>'dstIp', '')) LIKE $${params.length}`);
     }
 
     const whereSql = where.join(' AND ');
