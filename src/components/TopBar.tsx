@@ -31,6 +31,7 @@ interface TopBarProps {
   onOpenAlertConfig: () => void;
   onInvestigateSyslog: (query: string) => void;
   loadingSample: boolean;
+  onOpenPalette?: () => void;
   toastPopupsEnabled: boolean;
   onToggleToastPopups: () => void;
   colorMode: 'light' | 'dark';
@@ -47,6 +48,7 @@ export function TopBar({
   onOpenAlertConfig,
   onInvestigateSyslog,
   loadingSample,
+  onOpenPalette,
   toastPopupsEnabled,
   onToggleToastPopups,
   colorMode,
@@ -129,6 +131,21 @@ export function TopBar({
       </div>
 
       <div className="flex items-center gap-2.5 shrink-0">
+        {onOpenPalette && (
+          <button
+            type="button"
+            onClick={onOpenPalette}
+            title="Buscar telas, ações e IPs (Ctrl+K)"
+            aria-label="Abrir paleta de comandos"
+            className="inline-flex items-center gap-2 px-2.5 py-2 text-xs font-medium rounded-md border border-[var(--fw-border)] bg-white text-[var(--fw-text-muted)] hover:text-[var(--fw-accent)] hover:border-[var(--fw-border-strong)] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <Search className="w-3.5 h-3.5" aria-hidden="true" />
+            <span className="hidden lg:inline">Buscar</span>
+            <kbd className="hidden lg:inline font-mono text-[10px] text-[var(--fw-text-subtle)] border border-[var(--fw-border)] rounded px-1">
+              Ctrl K
+            </kbd>
+          </button>
+        )}
         <button
           type="button"
           onClick={onToggleToastPopups}

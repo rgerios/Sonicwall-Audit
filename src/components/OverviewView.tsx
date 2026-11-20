@@ -41,6 +41,7 @@ import type { ActiveSection, AuditOverview, FirewallVendor } from '../types.ts';
 import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
 import { OverviewAlertCenter } from './OverviewAlertCenter.tsx';
 import { ResourceHistoryCard } from './ResourceHistoryCard.tsx';
+import { SecurityPosture } from './SecurityPosture.tsx';
 
 interface OverviewViewProps {
   vendor: FirewallVendor;
@@ -1079,6 +1080,8 @@ export function OverviewView({
 
   return (
     <div className="space-y-4">
+      <SecurityPosture vendor={vendor} overview={overview} onNavigate={onNavigate} />
+
       <OverviewAlertCenter
         vendor={vendor}
         overview={overview}

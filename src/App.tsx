@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { CommandPalette } from './components/CommandPalette.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { LoginView } from './components/LoginView.tsx';
 import { NotificationToastStack } from './components/NotificationToastStack.tsx';
@@ -92,6 +93,18 @@ export default function App() {
   const [pendingAiPrompt, setPendingAiPrompt] = useState<string | null>(null);
   const [pendingSyslogQuery, setPendingSyslogQuery] = useState<string | null>(null);
   const [openAlertConfigSignal, setOpenAlertConfigSignal] = useState(0);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-vendor', activeVendor);
@@ -307,6 +320,7 @@ export default function App() {
           onOpenAlertConfig={handleOpenAlertConfig}
           onInvestigateSyslog={handleInvestigateSyslog}
           loadingSample={loadingSample}
+          onOpenPalette={() => setPaletteOpen(true)}
           toastPopupsEnabled={toastPopupsEnabled}
           onToggleToastPopups={() => setToastPopupsEnabled((v) => !v)}
           colorMode={colorMode}
@@ -396,6 +410,25 @@ export default function App() {
           </span>
         </footer>
       </div>
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        vendor={activeVendor}
+        overview={overview}
+        colorMode={colorMode}
+        onNavigate={setActiveSection}
+        onSelectVendor={handleSelectVendor}
+        onSelectSite={(siteId) => void handleSelectSite(siteId)}
+        onInvestigate={handleInvestigateSyslog}
+        onToggleColorMode={() => setColorMode((m) => (m === 'dark' ? 'light' : 'dark'))}
+        onToggleToastPopups={() => setToastPopupsEnabled((v) => !v)}
+        onLoadSample={() => void handleLoadSample()}
+        onRefresh={handleDataChanged}
+        onOpenAlertConfig={handleOpenAlertConfig}
+        onOpenPasswordModal={() => setShowPasswordModal(true)}
+        onLogout={() => void handleLogout()}
+      />
 
       {showPasswordModal && auth.username && (
         <Suspense fallback={null}>
