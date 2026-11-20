@@ -31,6 +31,8 @@ export interface AiProviderSettings {
   model: string;
   baseUrl: string;
   apiKey: string;
+  /** Mascara IPs, MACs e e-mails antes de enviar à IA (padrão: ligado). */
+  anonymize?: boolean;
 }
 
 export interface FirewallSiteRecord {

@@ -74,6 +74,7 @@ export function AiAnalystView({
   const [model, setModel] = useState('gemini-4-hydrogen');
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKeyInput, setApiKeyInput] = useState('');
+  const [anonymize, setAnonymize] = useState(true);
   const [savingConfig, setSavingConfig] = useState(false);
   const [configStatus, setConfigStatus] = useState<{ type: 'ok' | 'err'; text: string } | null>(
     null
@@ -109,6 +110,7 @@ export function AiAnalystView({
         setProvider(data.provider);
         setModel(data.model || PROVIDER_DEFAULTS[data.provider].defaultModel);
         setBaseUrl(data.baseUrl || PROVIDER_DEFAULTS[data.provider].defaultBaseUrl);
+        setAnonymize(data.anonymize !== false);
       }
     };
     void loadConfig();
@@ -134,6 +136,7 @@ export function AiAnalystView({
 
   const hasUnsavedConfig = Boolean(
     apiKeyInput.trim() ||
+      (config && anonymize !== config.anonymize) ||
       (config &&
         (provider !== config.provider ||
           model !== (config.model || PROVIDER_DEFAULTS[config.provider].defaultModel) ||
@@ -151,6 +154,7 @@ export function AiAnalystView({
           provider,
           model,
           baseUrl,
+          anonymize,
           apiKey: apiKeyInput.trim() || undefined,
         }),
       });
@@ -550,6 +554,25 @@ export function AiAnalystView({
             )}
           </div>
         </div>
+
+        <label className="flex items-start gap-2.5 p-3 rounded-md border border-[var(--fw-border)] bg-[var(--fw-surface-soft)] cursor-pointer">
+          <input
+            type="checkbox"
+            checked={anonymize}
+            onChange={(e) => {
+              setAnonymize(e.target.checked);
+              setConfigStatus(null);
+            }}
+            className="mt-0.5 accent-[var(--fw-accent)]"
+          />
+          <span className="text-xs text-[var(--fw-text-body)] leading-snug">
+            <span className="font-medium text-[var(--fw-heading)]">Anonimizar dados enviados à IA</span>
+            <br />
+            IPs, MACs e e-mails são trocados por códigos (ex.: IP-PRIV-001) antes de sair do servidor
+            e restaurados na resposta. Recomendado para provedores externos; desative só para
+            modelos locais ou se precisar de consulta de reputação por IP.
+          </span>
+        </label>
 
         {configStatus && (
           <div

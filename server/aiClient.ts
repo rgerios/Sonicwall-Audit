@@ -1,4 +1,5 @@
 import { GoogleGenAI, type Content } from '@google/genai';
+import { createAnonymizer } from './aiAnonymizer.ts';
 import type {
   AiChatMessage,
   AiProviderSettings,
@@ -15,6 +16,7 @@ export const DEFAULT_AI_SETTINGS: AiProviderSettings = {
   model: 'gemini-4-hydrogen',
   baseUrl: '',
   apiKey: '',
+  anonymize: true,
 };
 
 export function maskSecret(secret: string): string {
@@ -32,6 +34,7 @@ export function toPublicAiConfig(settings: AiProviderSettings): AiPublicConfig {
     hasCustomKey: settings.apiKey.trim().length > 0,
     hasServerGeminiKey: Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0),
     maskedKey: maskSecret(settings.apiKey),
+    anonymize: settings.anonymize !== false,
   };
 }
 
@@ -330,23 +333,24 @@ export async function runAiLogAnalysis(params: {
     params.rules,
     params.nats
   );
-  const systemInstruction = buildSystemInstruction(contextSnapshot);
+  const anonymizer = params.settings.anonymize !== false ? createAnonymizer() : null;
+  const protect = (text: string) => (anonymizer ? anonymizer.mask(text) : text);
+  const restore = (text: string) => (anonymizer ? anonymizer.unmask(text) : text);
+
+  const systemInstruction = protect(buildSystemInstruction(contextSnapshot));
+  const history = params.history.map((m) => ({ ...m, content: protect(m.content) }));
+  const message = protect(params.message);
 
   if (params.settings.provider === 'gemini') {
-    const result = await callGeminiProvider(
-      params.settings,
-      systemInstruction,
-      params.history,
-      params.message
-    );
-    return { ...result, provider: 'gemini' };
+    const result = await callGeminiProvider(params.settings, systemInstruction, history, message);
+    return { ...result, reply: restore(result.reply), provider: 'gemini' };
   }
 
   const result = await callOpenAiCompatibleProvider(
     params.settings,
     systemInstruction,
-    params.history,
-    params.message
+    history,
+    message
   );
-  return { ...result, provider: params.settings.provider };
+  return { ...result, reply: restore(result.reply), provider: params.settings.provider };
 }

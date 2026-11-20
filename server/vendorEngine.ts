@@ -2313,6 +2313,7 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
       const baseUrl = String(req.body?.baseUrl || '').trim();
       const incomingKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim() : undefined;
       const clearKey = Boolean(req.body?.clearKey);
+      const anonymizeIncoming = typeof req.body?.anonymize === 'boolean' ? req.body.anonymize : undefined;
 
       await reloadSharedAiSettings();
 
@@ -2329,6 +2330,7 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
         baseUrl,
         // Chave cifrada em repouso (AES-256-GCM)
         apiKey: plainKey ? `${ENC_PREFIX}${authManager.encryptSecret(plainKey)}` : '',
+        anonymize: anonymizeIncoming ?? getAiSettingsPlain().anonymize !== false,
       };
 
       store.aiSettings = updated;

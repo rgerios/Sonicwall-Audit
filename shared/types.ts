@@ -417,6 +417,7 @@ export interface AiPublicConfig {
   hasCustomKey: boolean;
   hasServerGeminiKey: boolean;
   maskedKey: string;
+  anonymize: boolean;
 }
 
 export interface AiChatMessage {
