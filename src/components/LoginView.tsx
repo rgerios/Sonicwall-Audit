@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Eye, EyeOff, Lock, ShieldCheck, Terminal, UserPlus } from 'lucide-react';
+import { LoginBackdrop } from './LoginBackdrop.tsx';
 
 interface LoginViewProps {
   needsSetup: boolean;
@@ -45,8 +46,9 @@ export function LoginView({ needsSetup, onAuthenticated }: LoginViewProps) {
   };
 
   return (
-    <div className="min-h-screen text-[var(--fw-text)] flex items-center justify-center p-6">
-      <div className="w-full max-w-md bg-white border border-[var(--fw-border)] rounded-lg overflow-hidden">
+    <div className="login-neutral relative min-h-screen text-[var(--fw-text)] flex items-center justify-center p-6">
+      <LoginBackdrop />
+      <div className="relative z-10 w-full max-w-md bg-white/90 backdrop-blur-md border border-white/30 rounded-lg overflow-hidden shadow-2xl shadow-black/40">
         <div className="bg-[var(--fw-surface)] border-b border-[var(--fw-border)] px-6 py-5 flex items-center gap-3">
           <div className="w-9 h-9 rounded-md bg-[var(--fw-accent)] text-white flex items-center justify-center shrink-0">
             <Terminal className="w-5 h-5" aria-hidden="true" />
