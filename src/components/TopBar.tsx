@@ -100,6 +100,7 @@ export function TopBar({
   const sectionLabels: Record<ActiveSection, string> = {
     overview: 'Visão Geral',
     syslogs: 'Análise de Syslogs',
+    destinations: 'Radar de Destinos',
     rules: 'Regras de Firewall Sem Uso',
     nats: vendor === 'fortigate' ? 'VIPs, IP Pools & NAT Sem Uso' : 'Políticas NAT Sem Uso',
     reports: 'Relatório Consolidado',

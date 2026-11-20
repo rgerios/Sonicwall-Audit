@@ -1,6 +1,14 @@
 export type FirewallVendor = 'sonicwall' | 'fortigate';
 
-export type ActiveSection = 'overview' | 'syslogs' | 'rules' | 'nats' | 'reports' | 'ai' | 'connect';
+export type ActiveSection =
+  | 'overview'
+  | 'syslogs'
+  | 'destinations'
+  | 'rules'
+  | 'nats'
+  | 'reports'
+  | 'ai'
+  | 'connect';
 
 export type SyslogSeverity =
   | 'emergency'
@@ -486,3 +494,11 @@ export interface AppLogEntry {
   message: string;
   detail?: string;
 }
+
+export type {
+  DestinationMetric,
+  DestinationNode,
+  DestinationScope,
+  DestinationService,
+  DestinationsReport,
+} from './destinations.ts';

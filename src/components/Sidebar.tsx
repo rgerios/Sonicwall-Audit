@@ -8,6 +8,7 @@ import {
   KeyRound,
   LogOut,
   Plus,
+  Radar,
   ServerCog,
   ShieldAlert,
   Terminal,
@@ -74,6 +75,11 @@ export function Sidebar({
       label: 'Syslogs',
       icon: FileTerminal,
       count: overview?.totalSyslogs || undefined,
+    },
+    {
+      id: 'destinations',
+      label: 'Destinos',
+      icon: Radar,
     },
     {
       id: 'rules',

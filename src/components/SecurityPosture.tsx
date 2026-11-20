@@ -35,6 +35,7 @@ const GRADE_COLOR: Record<PostureGrade, string> = {
 const SECTION_LABEL: Record<ActiveSection, string> = {
   overview: 'Ver alertas',
   syslogs: 'Ver logs',
+  destinations: 'Ver destinos',
   rules: 'Revisar regras',
   nats: 'Revisar NATs',
   reports: 'Ver relatório',

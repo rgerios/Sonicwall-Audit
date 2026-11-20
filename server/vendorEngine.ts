@@ -1,3 +1,5 @@
+import { buildDestinationsReport } from './destinationsEngine.ts';
+import { getSharedResolver } from './rdns.ts';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -1879,6 +1881,34 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
   });
 
   // --- Syslogs ---------------------------------------------------------------
+
+  // --- Radar de destinos -------------------------------------------------------
+  // Agrega os destinos (FQDN do log ou DNS reverso, senão IP) da janela recente em memória.
+  router.get(
+    '/destinations',
+    asyncRoute(async (req, res) => {
+      const site = siteFor(req);
+      const minutesRaw = Number(req.query.minutes ?? 0);
+      const minutes = Number.isFinite(minutesRaw) && minutesRaw > 0 ? Math.min(43200, Math.floor(minutesRaw)) : 0;
+      const sinceIso = minutes > 0 ? new Date(Date.now() - minutes * 60 * 1000).toISOString() : undefined;
+      const events = sinceIso
+        ? site.syslogs.filter((ev) => !ev.ingestedAt || ev.ingestedAt >= sinceIso)
+        : site.syslogs;
+      const resolver = getSharedResolver();
+      const report = buildDestinationsReport({
+        events,
+        minutes,
+        windowSize: site.syslogs.length,
+        lookupHost: (ip) => resolver.lookupCached(ip),
+        resolver: { enabled: resolver.enabled, ...resolver.stats() },
+      });
+      // Resolve em segundo plano os IPs públicos mais ativos que ainda não têm nome
+      resolver.schedule(
+        report.nodes.filter((n) => n.host === null && n.scope === 'public').slice(0, 40).map((n) => n.ip)
+      );
+      res.json(report);
+    })
+  );
 
   router.get(
     '/syslogs',

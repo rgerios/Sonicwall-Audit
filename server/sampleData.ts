@@ -1,4 +1,5 @@
 import { parseSonicWallSyslog } from './parsers.ts';
+import { sonicWallSampleWebLines } from './sampleWebTraffic.ts';
 import type {
   ApplianceMetadata,
   FirewallRule,
@@ -68,7 +69,10 @@ export function createSampleDataset(): {
   nats: NatPolicy[];
   telemetry: TelemetrySnapshot;
 } {
-  const syslogs = parseSonicWallSyslog(buildSampleSyslogText(), 'sample');
+  const syslogs = parseSonicWallSyslog(
+    [buildSampleSyslogText(), ...sonicWallSampleWebLines()].join('\n'),
+    'sample'
+  );
 
   const rules: FirewallRule[] = [
     {

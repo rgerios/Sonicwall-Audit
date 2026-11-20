@@ -1,4 +1,5 @@
 import { parseFortiGateSyslog } from './fortigateParsers.ts';
+import { fortiGateSampleWebLines } from './sampleWebTraffic.ts';
 import type {
   ApplianceMetadata,
   FirewallRule,
@@ -63,7 +64,7 @@ export function createFortiGateSampleDataset(): {
     `date=${t16.date} time=${t16.time} devname="FGT-100F-FILIAL" devid="FG100FTK22088190" logid="0000000013" type="traffic" subtype="forward" level="warning" vd="root" srcip=198.51.100.77 srcport=44100 srcintf="wan1" dstip=200.201.180.50 dstport=3306 dstintf="dmz" proto=6 action="deny" policyid=0 service="MYSQL" msg="Implicit deny external MySQL probe"`,
   ].join('\n');
 
-  const syslogs = parseFortiGateSyslog(rawLogs, 'sample');
+  const syslogs = parseFortiGateSyslog([rawLogs, ...fortiGateSampleWebLines()].join('\n'), 'sample');
 
   const rules: FirewallRule[] = [
     {
