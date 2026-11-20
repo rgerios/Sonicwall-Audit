@@ -122,6 +122,12 @@ function parseSpeedMbps(rawSpeed: unknown): number {
   return 1000;
 }
 
+// Aprendido no SonicWall Migrator: o appliance responde 429/5xx sob carga e derruba sessões.
+const TRANSIENT_STATUS = new Set([429, 500, 502, 503, 504]);
+const TRANSIENT_RETRIES = 2;
+const TRANSIENT_BACKOFF_MS = 800;
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 async function requestSonicOs(
   baseUrl: string,
   path: string,
@@ -195,12 +201,15 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
   };
 
   // Authenticate session in SonicOS REST API (Gen 6.5 / Gen 7)
-  const loginRes = await requestSonicOs(baseUrl, '/api/sonicos/auth', {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({ override: false }),
-    ignoreTlsErrors: params.ignoreTlsErrors,
-  });
+  const basicOnly = { ...authHeaders };
+  const doLogin = () =>
+    requestSonicOs(baseUrl, '/api/sonicos/auth', {
+      method: 'POST',
+      headers: basicOnly,
+      body: JSON.stringify({ override: false }),
+      ignoreTlsErrors: params.ignoreTlsErrors,
+    });
+  const loginRes = await doLogin();
 
   if (loginRes.status >= 400) {
     const errRec = asRecord(loginRes.data);
@@ -216,21 +225,68 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
     );
   }
 
-  const loginData = asRecord(loginRes.data);
-  const bearerToken = pickString(loginData, ['token', 'access_token']);
-  const cookies = loginRes.headers['set-cookie'];
-  if (cookies && cookies.length > 0) {
-    authHeaders.Cookie = cookies.map((c) => c.split(';')[0]).join('; ');
-  }
-  if (bearerToken) {
-    authHeaders.Authorization = `Bearer ${bearerToken}`;
-  }
+  const applySession = (res: { data: unknown; headers: http.IncomingHttpHeaders }) => {
+    const bearerToken = pickString(asRecord(res.data), ['token', 'access_token']);
+    const cookies = res.headers['set-cookie'];
+    delete authHeaders.Cookie;
+    authHeaders.Authorization = basicOnly.Authorization;
+    if (cookies && cookies.length > 0) {
+      authHeaders.Cookie = cookies.map((c) => c.split(';')[0]).join('; ');
+    }
+    if (bearerToken) {
+      authHeaders.Authorization = `Bearer ${bearerToken}`;
+    }
+  };
+  applySession(loginRes);
 
-  const safeGet = (endpoint: string) =>
-    requestSonicOs(baseUrl, endpoint, {
-      headers: authHeaders,
-      ignoreTlsErrors: params.ignoreTlsErrors,
-    }).catch(() => ({ status: 404, data: {}, headers: {} }));
+  // Sessões da API expiram ou são derrubadas (outro login do mesmo admin) no meio da coleta.
+  // Um único re-login compartilhado atende todas as requisições paralelas que receberem 401.
+  let reloginInFlight: Promise<boolean> | null = null;
+  const relogin = (): Promise<boolean> => {
+    reloginInFlight ??= doLogin()
+      .then((res) => {
+        if (res.status >= 400) return false;
+        applySession(res);
+        return true;
+      })
+      .catch(() => false)
+      .finally(() => {
+        reloginInFlight = null;
+      });
+    return reloginInFlight;
+  };
+
+  const safeGet = async (endpoint: string) => {
+    const empty = { status: 404, data: {}, headers: {} as http.IncomingHttpHeaders };
+    let reauthed = false;
+    for (let attempt = 0; attempt <= TRANSIENT_RETRIES; attempt += 1) {
+      try {
+        const res = await requestSonicOs(baseUrl, endpoint, {
+          headers: authHeaders,
+          ignoreTlsErrors: params.ignoreTlsErrors,
+        });
+        if (res.status === 401 && !reauthed) {
+          reauthed = true;
+          if (await relogin()) {
+            attempt -= 1;
+            continue;
+          }
+        }
+        if (TRANSIENT_STATUS.has(res.status) && attempt < TRANSIENT_RETRIES) {
+          await sleep(TRANSIENT_BACKOFF_MS * 2 ** attempt);
+          continue;
+        }
+        return res;
+      } catch {
+        if (attempt < TRANSIENT_RETRIES) {
+          await sleep(TRANSIENT_BACKOFF_MS * 2 ** attempt);
+          continue;
+        }
+        return empty;
+      }
+    }
+    return empty;
+  };
 
   try {
     let [

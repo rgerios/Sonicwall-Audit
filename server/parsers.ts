@@ -197,12 +197,14 @@ export function parseSonicWallSyslog(
 }
 
 function decodeExpIfBase64(content: string): string {
-  const trimmed = content.trim();
-  // SonicWall .exp files are often base64 encoded blocks without spaces or with line breaks
-  if (!trimmed.includes('=') && /^[A-Za-z0-9+/=\r\n]+$/.test(trimmed)) {
+  // O .exp real é Base64 de pares chave=valor separados por '&' e costuma terminar com '&'
+  // ou espaços; o Base64 em si pode ter padding '=' no fim (não é sinal de texto já decodificado).
+  const trimmed = content.trim().replace(/[&\s]+$/, '');
+  if (/^[A-Za-z0-9+/]+={0,2}$/.test(trimmed.replace(/\s+/g, '')) && trimmed.length >= 8) {
     try {
       const decoded = Buffer.from(trimmed.replace(/\s+/g, ''), 'base64').toString('utf8');
-      if (decoded.includes('=') || decoded.includes('&')) {
+      // Só aceita se o resultado parece mesmo uma lista chave=valor
+      if (decoded.includes('=') && /^[\x20-\x7e\r\n\t]+$/.test(decoded)) {
         return decoded;
       }
     } catch {
@@ -210,6 +212,14 @@ function decodeExpIfBase64(content: string): string {
     }
   }
   return content;
+}
+
+/** Códigos numéricos de ação do .exp: 2 = permitir; qualquer outro valor bloqueia. */
+function parseExpAction(raw: string): FirewallRule['action'] {
+  const v = raw.trim().toLowerCase();
+  if (v === '2' || v === 'allow' || v === 'permit') return 'allow';
+  if (v === 'discard' || v === 'drop') return 'discard';
+  return 'deny';
 }
 
 export function parseSonicWallExp(content: string): {
@@ -236,7 +246,7 @@ export function parseSonicWallExp(content: string): {
   const natIndices = new Set<string>();
 
   for (const key of kvMap.keys()) {
-    const policyMatch = /^policy(?:Action|SrcZone|DstZone|Name|Enabled|Hits)_(\d+)$/.exec(key);
+    const policyMatch = /^policy(?:Action|SrcZone|DstZone|DstSvc|Name|Enabled|Hits)_(\d+)$/.exec(key);
     if (policyMatch) ruleIndices.add(policyMatch[1]);
 
     const natMatch = /^natPolicy(?:OrigSrc|TransSrc|OrigDst|TransDst|Name|Enabled|Hits)_(\d+)$/.exec(key);
@@ -246,9 +256,7 @@ export function parseSonicWallExp(content: string): {
   const rules: FirewallRule[] = [];
   const sortedRuleIdx = [...ruleIndices].sort((a, b) => Number(a) - Number(b));
   for (const idx of sortedRuleIdx) {
-    const actionRaw = (kvMap.get(`policyAction_${idx}`) || 'allow').toLowerCase();
-    const action: FirewallRule['action'] =
-      actionRaw === 'deny' ? 'deny' : actionRaw === 'discard' || actionRaw === 'drop' ? 'discard' : 'allow';
+    const action = parseExpAction(kvMap.get(`policyAction_${idx}`) || kvMap.get(`policy_action_${idx}`) || 'allow');
     const enabledVal = kvMap.get(`policyEnabled_${idx}`);
     const enabled = enabledVal === undefined ? true : enabledVal === '1' || enabledVal.toLowerCase() === 'true' || enabledVal.toLowerCase() === 'on';
     const hits = Number.parseInt(kvMap.get(`policyHits_${idx}`) || kvMap.get(`policyHitCount_${idx}`) || '0', 10) || 0;
@@ -261,7 +269,8 @@ export function parseSonicWallExp(content: string): {
       toZone: kvMap.get(`policyDstZone_${idx}`) || 'WAN',
       source: kvMap.get(`policySrcNet_${idx}`) || 'Any',
       destination: kvMap.get(`policyDstNet_${idx}`) || 'Any',
-      service: kvMap.get(`policyService_${idx}`) || 'Any',
+      // Chave real do SonicOS: policyDstSvc_ (policyService_ fica como fallback)
+      service: kvMap.get(`policyDstSvc_${idx}`) || kvMap.get(`policyService_${idx}`) || 'Any',
       action,
       enabled,
       applianceHits: hits,
@@ -659,6 +668,17 @@ export function correlateTrafficAndRules(
   return classifyPolicies(rules, nats, ctx);
 }
 
+/**
+ * Formata um identificador para a CLI do SonicOS (convenção validada no SonicWall Migrator):
+ * remove aspas e quebras de linha (que quebrariam ou injetariam comandos no script) e
+ * coloca entre aspas quando houver espaço ou símbolo.
+ */
+export function cliName(name: string): string {
+  const clean = String(name ?? '').replace(/["\r\n\t]+/g, ' ').trim();
+  if (!clean) return '""';
+  return /[\s:;.,/()[\]{}*&^%$#@!+=~`|\\]/.test(clean) ? `"${clean}"` : clean;
+}
+
 export function generateSonicOsCli(
   rules: FirewallRule[],
   nats: NatPolicy[],
@@ -675,11 +695,13 @@ export function generateSonicOsCli(
     lines.push('!');
     lines.push(`! Regras de Firewall (${rules.length})`);
     for (const r of rules) {
-      const target = r.uuid ? `uuid ${r.uuid}` : `from ${r.fromZone} to ${r.toZone} name "${r.name}"`;
+      const target = r.uuid
+        ? `uuid ${cliName(r.uuid)}`
+        : `from ${cliName(r.fromZone)} to ${cliName(r.toZone)} name ${cliName(r.name)}`;
       if (mode === 'disable') {
         lines.push(`access-rule ipv4 ${target}`);
-        lines.push('  no enable');
-        lines.push('  exit');
+        lines.push('    no enable');
+        lines.push('    exit');
       } else {
         lines.push(`no access-rule ipv4 ${target}`);
       }
@@ -690,11 +712,11 @@ export function generateSonicOsCli(
     lines.push('!');
     lines.push(`! Políticas NAT (${nats.length})`);
     for (const n of nats) {
-      const target = n.uuid ? `uuid ${n.uuid}` : `name "${n.name}"`;
+      const target = n.uuid ? `uuid ${cliName(n.uuid)}` : `name ${cliName(n.name)}`;
       if (mode === 'disable') {
         lines.push(`nat-policy ipv4 ${target}`);
-        lines.push('  no enable');
-        lines.push('  exit');
+        lines.push('    no enable');
+        lines.push('    exit');
       } else {
         lines.push(`no nat-policy ipv4 ${target}`);
       }
