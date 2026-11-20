@@ -118,3 +118,39 @@ sudo ufw reload
   ```bash
   cat backup-fwaudit-AAAA-MM-DD.sql | docker exec -i fwaudit-db psql -U fwaudit -d fwaudit
   ```
+
+---
+
+## Disco mecânico (HDD) e muitos logs
+
+O FW Audit guarda todo o histórico de syslogs no PostgreSQL. Em disco mecânico, uma tabela com milhões de
+linhas fica lenta se o sistema recontar tudo toda hora. A versão atual evita isso:
+
+- **Contadores incrementais.** Totais por ação/severidade e por hora são mantidos no próprio banco
+  (tabelas `syslog_counters` e `syslog_hourly`), atualizados a cada ingestão e a cada limpeza. A partida e a
+  limpeza de retenção **não varrem mais a tabela inteira**.
+- **Cálculo inicial uma única vez.** Na primeira subida após atualizar, cada firewall tem seus contadores
+  calculados em segundo plano (uma varredura completa, uma só vez, e uma por vez no banco). O log mostra
+  `Calculando os contadores de syslog...` e depois `...prontos em Ns`. Enquanto isso a tela usa a janela
+  recente; os números exatos aparecem quando terminar. Em HDD com muitos GB isso pode levar vários minutos.
+- **Servidor abre a porta na hora.** `/api/health` responde logo (`ready:false` até concluir a carga) e a API
+  responde 503 durante a carga, então o Docker não marca o container como `unhealthy`.
+- **Limpeza de retenção em lotes** de 10 mil linhas, com pausa entre lotes, em segundo plano.
+- **PostgreSQL ajustado para HDD** no `docker-compose.yml` (`synchronous_commit=off`, checkpoints espaçados,
+  WAL comprimido). `synchronous_commit=off` faz o COMMIT não esperar o disco: numa queda de energia perdem-se,
+  no máximo, ~0,6 s de logs recém-chegados, sem corromper o banco.
+
+Ajustes que ajudam ainda mais (no `.env`):
+
+```text
+# Menos eventos na memória = partida e análises mais leves (padrão com PostgreSQL: 50000)
+SYSLOG_MEMORY_WINDOW=20000
+# Teto de linhas por firewall (0 = sem teto) e a retenção em dias, definida por firewall na tela de conexão
+SYSLOG_MAX_ROWS_PER_SITE=0
+# Memória do PostgreSQL (ajuste conforme a RAM do servidor)
+PG_SHARED_BUFFERS=512MB
+PG_EFFECTIVE_CACHE_SIZE=2GB
+```
+
+Se puder, mova o volume do banco (`fwaudit_pgdata`) para um SSD: é o ganho mais direto. Consultas acima de
+5 s ficam registradas no log do PostgreSQL (`docker compose logs db`).

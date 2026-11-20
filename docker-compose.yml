@@ -3,6 +3,36 @@ services:
     image: postgres:16-alpine
     container_name: fwaudit-db
     restart: unless-stopped
+    # Ajuste para disco mecânico (HDD) e tabela de logs grande. Valores sobrescrevíveis no .env.
+    # synchronous_commit=off: o COMMIT não espera o fsync; em queda de energia perde-se no máximo
+    # ~0,6 s de logs recém-chegados, sem corromper o banco. Ganho enorme na ingestão em HDD.
+    shm_size: 256mb
+    command:
+      - postgres
+      - -c
+      - synchronous_commit=off
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-256MB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-1GB}
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - wal_compression=on
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - max_wal_size=2GB
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - effective_io_concurrency=2
+      - -c
+      - log_min_duration_statement=5000
+      - -c
+      - log_checkpoints=on
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-fwaudit}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fwaudit_change_me}

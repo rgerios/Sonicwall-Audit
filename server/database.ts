@@ -230,6 +230,30 @@ export class PostgresStore {
         PRIMARY KEY (site_id, ts)
       );
 
+      -- Contadores incrementais: evitam recontar a tabela de syslogs inteira (leitura de GBs em
+      -- disco mecânico) na partida e após cada limpeza de retenção.
+      CREATE TABLE IF NOT EXISTS syslog_counters (
+        site_id TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+        action TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        total BIGINT NOT NULL DEFAULT 0,
+        PRIMARY KEY (site_id, action, severity)
+      );
+
+      CREATE TABLE IF NOT EXISTS syslog_hourly (
+        site_id TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+        bucket TIMESTAMPTZ NOT NULL,
+        total BIGINT NOT NULL DEFAULT 0,
+        allow BIGINT NOT NULL DEFAULT 0,
+        blocked BIGINT NOT NULL DEFAULT 0,
+        PRIMARY KEY (site_id, bucket)
+      );
+
+      CREATE TABLE IF NOT EXISTS syslog_stats_state (
+        site_id TEXT PRIMARY KEY REFERENCES sites(id) ON DELETE CASCADE,
+        ready_at TIMESTAMPTZ NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_sites_vendor ON sites (vendor, created_at ASC);
       CREATE INDEX IF NOT EXISTS idx_syslogs_site_event ON syslogs (site_id, event_at DESC);
       CREATE INDEX IF NOT EXISTS idx_syslogs_site_ingested ON syslogs (site_id, ingested_at DESC);
@@ -720,38 +744,175 @@ export class PostgresStore {
           JSON.stringify(ev)
         );
       });
-      await pool.query(
-        `INSERT INTO syslogs (site_id, vendor, id, ingested_at, event_at, event_timestamp, priority, action, severity, search_text, payload_json) VALUES ${placeholders.join(', ')} ON CONFLICT (site_id, id) DO NOTHING`,
-        values
-      );
+      // Mesma transação, ordem fixa: (1) insere e soma os contadores por ação/severidade;
+      // (2) soma a tabela por hora com o que o passo 1 devolveu. Duplicados não contam.
+      await this.withTransaction(async (client) => {
+        const res = await client.query<{ hourly: Array<{ b: string; total: number; allow: number; blocked: number }> }>(
+          `WITH ins AS (
+             INSERT INTO syslogs (site_id, vendor, id, ingested_at, event_at, event_timestamp, priority, action, severity, search_text, payload_json)
+             VALUES ${placeholders.join(', ')}
+             ON CONFLICT (site_id, id) DO NOTHING
+             RETURNING action, severity, event_at
+           ), c AS (
+             SELECT action, severity, COUNT(*) AS n FROM ins GROUP BY 1, 2
+           ), uc AS (
+             INSERT INTO syslog_counters (site_id, action, severity, total)
+             SELECT $1::text, action, severity, n FROM c ORDER BY action, severity
+             ON CONFLICT (site_id, action, severity) DO UPDATE SET total = syslog_counters.total + EXCLUDED.total
+             RETURNING 1
+           ), h AS (
+             SELECT date_trunc('hour', event_at) AS b,
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE action = 'allow') AS allow,
+                    COUNT(*) FILTER (WHERE action IN ('drop', 'deny', 'reset')) AS blocked
+             FROM ins WHERE event_at IS NOT NULL GROUP BY 1
+           )
+           SELECT COALESCE(json_agg(h), '[]'::json) AS hourly FROM h`,
+          values
+        );
+        await this.applyHourly(client, siteId, res.rows[0]?.hourly ?? [], 1);
+      });
     }
+  }
+
+  /** Executa fn numa transação; repete (algumas vezes) se o banco abortar por deadlock/serialização. */
+  private async withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+    for (let attempt = 1; ; attempt += 1) {
+      const client = await this.getPool().connect();
+      try {
+        await client.query('BEGIN');
+        const out = await fn(client);
+        await client.query('COMMIT');
+        return out;
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        const code = (err as { code?: string }).code;
+        if ((code === '40P01' || code === '40001') && attempt < 4) {
+          await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+          continue;
+        }
+        throw err;
+      } finally {
+        client.release();
+      }
+    }
+  }
+
+  /**
+   * Soma (ou subtrai, com sign = -1) as contagens por hora. Sempre roda DEPOIS dos contadores por
+   * ação/severidade e em ordem de bucket: com essa ordem fixa em todo o código não há deadlock.
+   */
+  private async applyHourly(
+    client: PoolClient,
+    siteId: string,
+    rows: Array<{ b: string; total: number | string; allow: number | string; blocked: number | string }>,
+    sign: 1 | -1
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    await client.query(
+      `INSERT INTO syslog_hourly (site_id, bucket, total, allow, blocked)
+       SELECT $1::text, b, t, a, k FROM unnest($2::timestamptz[], $3::bigint[], $4::bigint[], $5::bigint[]) AS u(b, t, a, k)
+       ORDER BY b
+       ON CONFLICT (site_id, bucket) DO UPDATE SET
+         total = syslog_hourly.total + EXCLUDED.total,
+         allow = syslog_hourly.allow + EXCLUDED.allow,
+         blocked = syslog_hourly.blocked + EXCLUDED.blocked`,
+      [
+        siteId,
+        rows.map((r) => r.b),
+        rows.map((r) => sign * Number(r.total)),
+        rows.map((r) => sign * Number(r.allow)),
+        rows.map((r) => sign * Number(r.blocked)),
+      ]
+    );
   }
 
   async deleteSyslogs(siteId: string): Promise<void> {
     if (!this.isEnabled()) return;
-    await this.getPool().query('DELETE FROM syslogs WHERE site_id = $1', [siteId]);
+    const client = await this.getPool().connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM syslogs WHERE site_id = $1', [siteId]);
+      await client.query('DELETE FROM syslog_counters WHERE site_id = $1', [siteId]);
+      await client.query('DELETE FROM syslog_hourly WHERE site_id = $1', [siteId]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
-  /** Remove eventos mais antigos que o corte e, se configurado, o excedente do teto de linhas. */
+  /**
+   * Remove, em lotes, os eventos mais antigos que o corte (e, se configurado, o excedente do teto
+   * de linhas). Cada lote atualiza os contadores no mesmo comando e cede o disco entre lotes,
+   * para uma limpeza grande não travar a ingestão nem a interface em disco mecânico.
+   */
   async purgeSyslogs(siteId: string, cutoffIso: string, maxRows = 0): Promise<number> {
     if (!this.isEnabled()) return 0;
     const pool = this.getPool();
-    const res = await pool.query('DELETE FROM syslogs WHERE site_id = $1 AND ingested_at < $2', [
-      siteId,
-      cutoffIso,
-    ]);
-    let purged = res.rowCount || 0;
+    let purged = await this.purgeInBatches(siteId, cutoffIso);
     if (maxRows > 0) {
-      const over = await pool.query(
-        `DELETE FROM syslogs WHERE site_id = $1 AND ingested_at < (
-           SELECT ingested_at FROM syslogs WHERE site_id = $1
-           ORDER BY ingested_at DESC OFFSET $2 LIMIT 1
-         )`,
+      const edge = await pool.query<{ ingested_at: Date }>(
+        `SELECT ingested_at FROM syslogs WHERE site_id = $1 ORDER BY ingested_at DESC OFFSET $2 LIMIT 1`,
         [siteId, maxRows]
       );
-      purged += over.rowCount || 0;
+      if (edge.rows[0]) {
+        purged += await this.purgeInBatches(siteId, new Date(edge.rows[0].ingested_at).toISOString());
+      }
     }
+    await pool.query(
+      `DELETE FROM syslog_hourly WHERE site_id = $1 AND bucket < now() - interval '100 hours'`,
+      [siteId]
+    );
     return purged;
+  }
+
+  private async purgeInBatches(siteId: string, cutoffIso: string): Promise<number> {
+    const BATCH = 10_000;
+    let total = 0;
+    for (;;) {
+      const n = await this.withTransaction(async (client) => {
+        const res = await client.query<{
+          n: string;
+          hourly: Array<{ b: string; total: number; allow: number; blocked: number }>;
+        }>(
+          `WITH del AS (
+             DELETE FROM syslogs
+             WHERE ctid = ANY (ARRAY(
+               SELECT ctid FROM syslogs WHERE site_id = $1 AND ingested_at < $2::timestamptz LIMIT $3
+             ))
+             RETURNING action, severity, event_at
+           ), c AS (
+             SELECT action, severity, COUNT(*) AS n FROM del GROUP BY 1, 2
+           ), uc AS (
+             -- UPSERT negativo (e não UPDATE): se o cálculo inicial dos contadores ainda estiver em
+             -- andamento e a linha não existir, o decremento não pode se perder.
+             INSERT INTO syslog_counters (site_id, action, severity, total)
+             SELECT $1::text, action, severity, -n FROM c ORDER BY action, severity
+             ON CONFLICT (site_id, action, severity) DO UPDATE SET total = syslog_counters.total + EXCLUDED.total
+             RETURNING 1
+           ), h AS (
+             SELECT date_trunc('hour', event_at) AS b,
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE action = 'allow') AS allow,
+                    COUNT(*) FILTER (WHERE action IN ('drop', 'deny', 'reset')) AS blocked
+             FROM del WHERE event_at IS NOT NULL AND event_at >= now() - interval '100 hours' GROUP BY 1
+           )
+           SELECT (SELECT COUNT(*) FROM del)::text AS n,
+                  (SELECT COALESCE(json_agg(h), '[]'::json) FROM h) AS hourly`,
+          [siteId, cutoffIso, BATCH]
+        );
+        await this.applyHourly(client, siteId, res.rows[0]?.hourly ?? [], -1);
+        return Number(res.rows[0]?.n ?? 0);
+      });
+      total += n;
+      if (n < BATCH) break;
+      // Respira entre lotes: deixa a ingestão e as consultas usarem o disco
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return total;
   }
 
   async querySyslogs(
@@ -838,59 +999,170 @@ export class PostgresStore {
     return res.rows.map((r) => r.payload_json);
   }
 
-  async loadSyslogStats(siteId: string): Promise<SyslogStats> {
+  /**
+   * Estatísticas lidas dos contadores (sem varrer a tabela). Devolve null enquanto os contadores
+   * deste firewall ainda não foram calculados; o motor então usa a janela em memória e dispara
+   * backfillSyslogStats em segundo plano.
+   */
+  async loadSyslogStats(siteId: string): Promise<SyslogStats | null> {
     const pool = this.getPool();
-    const totals = await pool.query<{
-      action: string;
-      severity: string;
-      count: string;
-      oldest: Date | null;
-      newest: Date | null;
-    }>(
-      `SELECT action, severity, COUNT(*)::text AS count, MIN(ingested_at) AS oldest, MAX(ingested_at) AS newest
-       FROM syslogs WHERE site_id = $1 GROUP BY action, severity`,
+    const ready = await pool.query('SELECT 1 FROM syslog_stats_state WHERE site_id = $1', [siteId]);
+    if (ready.rows.length === 0) return null;
+
+    const counters = await pool.query<{ action: string; severity: string; total: string }>(
+      'SELECT action, severity, total::text AS total FROM syslog_counters WHERE site_id = $1',
       [siteId]
     );
-    const hourlyRes = await pool.query<{
-      bucket: Date;
-      total: string;
-      allow: string;
-      blocked: string;
-    }>(
-      `SELECT date_trunc('hour', event_at) AS bucket,
-              COUNT(*)::text AS total,
-              COUNT(*) FILTER (WHERE action = 'allow')::text AS allow,
-              COUNT(*) FILTER (WHERE action IN ('drop', 'deny', 'reset'))::text AS blocked
-       FROM syslogs
-       WHERE site_id = $1 AND event_at >= NOW() - INTERVAL '49 hours'
-       GROUP BY 1`,
+    const hourlyRes = await pool.query<{ bucket: Date; total: string; allow: string; blocked: string }>(
+      `SELECT bucket, total::text AS total, allow::text AS allow, blocked::text AS blocked
+       FROM syslog_hourly WHERE site_id = $1 AND bucket >= now() - interval '49 hours'`,
+      [siteId]
+    );
+    // MIN/MAX por índice (site_id, ingested_at): duas leituras de uma folha cada
+    const oldestRes = await pool.query<{ t: Date | null }>(
+      'SELECT ingested_at AS t FROM syslogs WHERE site_id = $1 ORDER BY ingested_at ASC LIMIT 1',
+      [siteId]
+    );
+    const newestRes = await pool.query<{ t: Date | null }>(
+      'SELECT ingested_at AS t FROM syslogs WHERE site_id = $1 ORDER BY ingested_at DESC LIMIT 1',
       [siteId]
     );
 
     const stats: SyslogStats = {
       total: 0,
-      oldestAt: null,
-      newestAt: null,
+      oldestAt: oldestRes.rows[0]?.t ? new Date(oldestRes.rows[0].t).toISOString() : null,
+      newestAt: newestRes.rows[0]?.t ? new Date(newestRes.rows[0].t).toISOString() : null,
       byAction: {},
       bySeverity: {},
       hourly: hourlyRes.rows.map((r) => ({
         startMs: new Date(r.bucket).getTime(),
-        total: Number(r.total),
-        allow: Number(r.allow),
-        blocked: Number(r.blocked),
+        total: Math.max(0, Number(r.total)),
+        allow: Math.max(0, Number(r.allow)),
+        blocked: Math.max(0, Number(r.blocked)),
       })),
     };
-    for (const row of totals.rows) {
-      const n = Number(row.count);
+    for (const row of counters.rows) {
+      const n = Math.max(0, Number(row.total));
       stats.total += n;
       stats.byAction[row.action] = (stats.byAction[row.action] || 0) + n;
       stats.bySeverity[row.severity] = (stats.bySeverity[row.severity] || 0) + n;
-      const oldest = row.oldest ? new Date(row.oldest).toISOString() : null;
-      const newest = row.newest ? new Date(row.newest).toISOString() : null;
-      if (oldest && (!stats.oldestAt || oldest < stats.oldestAt)) stats.oldestAt = oldest;
-      if (newest && (!stats.newestAt || newest > stats.newestAt)) stats.newestAt = newest;
     }
     return stats;
+  }
+
+  /**
+   * Calcula uma vez os contadores de um firewall a partir da tabela (a única varredura completa).
+   * Roda sob um advisory lock: só uma varredura pesada por vez no banco, mesmo com os dois backends.
+   * É segura com a ingestão em andamento: compara, num snapshot único, a contagem real com os
+   * contadores atuais e aplica só a diferença.
+   */
+  async backfillSyslogStats(siteId: string): Promise<void> {
+    if (!this.isEnabled()) return;
+    const pool = this.getPool();
+    const lockClient = await pool.connect();
+    try {
+      await lockClient.query('SELECT pg_advisory_lock(727002)');
+
+      type Delta = { action: string; severity: string; n: number };
+      const deltas = new Map<string, Delta>();
+      const hourly = new Map<number, { total: number; allow: number; blocked: number }>();
+
+      const snap = await pool.connect();
+      try {
+        await snap.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+        const real = await snap.query<{ action: string; severity: string; n: string }>(
+          'SELECT action, severity, COUNT(*)::text AS n FROM syslogs WHERE site_id = $1 GROUP BY 1, 2',
+          [siteId]
+        );
+        const cur = await snap.query<{ action: string; severity: string; total: string }>(
+          'SELECT action, severity, total::text AS total FROM syslog_counters WHERE site_id = $1',
+          [siteId]
+        );
+        const cutoffRes = await snap.query<{ t: Date }>(
+          `SELECT date_trunc('hour', now() - interval '73 hours') AS t`
+        );
+        const cutoff = cutoffRes.rows[0].t;
+        const realH = await snap.query<{ b: Date; total: string; allow: string; blocked: string }>(
+          `SELECT date_trunc('hour', event_at) AS b, COUNT(*)::text AS total,
+                  (COUNT(*) FILTER (WHERE action = 'allow'))::text AS allow,
+                  (COUNT(*) FILTER (WHERE action IN ('drop', 'deny', 'reset')))::text AS blocked
+           FROM syslogs WHERE site_id = $1 AND event_at >= $2 GROUP BY 1`,
+          [siteId, cutoff]
+        );
+        const curH = await snap.query<{ bucket: Date; total: string; allow: string; blocked: string }>(
+          `SELECT bucket, total::text AS total, allow::text AS allow, blocked::text AS blocked
+           FROM syslog_hourly WHERE site_id = $1 AND bucket >= $2`,
+          [siteId, cutoff]
+        );
+        await snap.query('COMMIT');
+
+        for (const r of real.rows) {
+          deltas.set(`${r.action}\u0000${r.severity}`, { action: r.action, severity: r.severity, n: Number(r.n) });
+        }
+        for (const r of cur.rows) {
+          const key = `${r.action}\u0000${r.severity}`;
+          const d = deltas.get(key) ?? { action: r.action, severity: r.severity, n: 0 };
+          d.n -= Number(r.total);
+          deltas.set(key, d);
+        }
+        for (const r of realH.rows) {
+          hourly.set(new Date(r.b).getTime(), {
+            total: Number(r.total),
+            allow: Number(r.allow),
+            blocked: Number(r.blocked),
+          });
+        }
+        for (const r of curH.rows) {
+          const ms = new Date(r.bucket).getTime();
+          const d = hourly.get(ms) ?? { total: 0, allow: 0, blocked: 0 };
+          d.total -= Number(r.total);
+          d.allow -= Number(r.allow);
+          d.blocked -= Number(r.blocked);
+          hourly.set(ms, d);
+        }
+      } catch (err) {
+        await snap.query('ROLLBACK').catch(() => undefined);
+        throw err;
+      } finally {
+        snap.release();
+      }
+
+      const counterRows = [...deltas.values()].filter((d) => d.n !== 0);
+      const hourRows = [...hourly.entries()].filter(([, d]) => d.total !== 0 || d.allow !== 0 || d.blocked !== 0);
+
+      // Aplica a diferença tabela por tabela, em transações separadas: nenhuma segura travas das duas
+      // ao mesmo tempo, então não forma ciclo com a ingestão/limpeza. É idempotente: se algo falhar
+      // no meio, rodar de novo recalcula a diferença contra os contadores atuais.
+      if (counterRows.length > 0) {
+        await this.withTransaction(async (client) => {
+          await client.query(
+            `INSERT INTO syslog_counters (site_id, action, severity, total)
+             SELECT $1::text, a, s, n FROM unnest($2::text[], $3::text[], $4::bigint[]) AS t(a, s, n)
+             ORDER BY a, s
+             ON CONFLICT (site_id, action, severity) DO UPDATE SET total = syslog_counters.total + EXCLUDED.total`,
+            [siteId, counterRows.map((d) => d.action), counterRows.map((d) => d.severity), counterRows.map((d) => d.n)]
+          );
+        });
+      }
+      if (hourRows.length > 0) {
+        await this.withTransaction(async (client) => {
+          await this.applyHourly(
+            client,
+            siteId,
+            hourRows.map(([ms, d]) => ({ b: new Date(ms).toISOString(), ...d })),
+            1
+          );
+        });
+      }
+      await pool.query(
+        `INSERT INTO syslog_stats_state (site_id, ready_at) VALUES ($1, now())
+         ON CONFLICT (site_id) DO UPDATE SET ready_at = now()`,
+        [siteId]
+      );
+    } finally {
+      await lockClient.query('SELECT pg_advisory_unlock(727002)').catch(() => undefined);
+      lockClient.release();
+    }
   }
 
   async insertMetric(siteId: string, sample: MetricSample): Promise<void> {

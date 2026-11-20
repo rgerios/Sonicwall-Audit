@@ -278,11 +278,50 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
     rt.syncing = previous?.syncing ?? false;
     if (usePg) {
       await flushPendingInserts();
-      applyDbStats(rt, await pgStore.loadSyslogStats(site.id));
+      const stats = await pgStore.loadSyslogStats(site.id);
+      if (stats) {
+        applyDbStats(rt, stats);
+      } else {
+        // Contadores ainda não calculados: usa a janela em memória por enquanto e calcula em segundo plano
+        addEventsToRuntime(rt, site.syslogs);
+        void ensureStatsBackfilled(site);
+      }
     } else {
       addEventsToRuntime(rt, site.syslogs);
     }
     runtimes.set(site.id, rt);
+  }
+
+  const statsBackfilling = new Set<string>();
+
+  /** Calcula os contadores de syslog de um firewall uma única vez (varredura completa, em segundo plano). */
+  async function ensureStatsBackfilled(site: FirewallSiteRecord): Promise<void> {
+    if (!usePg || statsBackfilling.has(site.id)) return;
+    statsBackfilling.add(site.id);
+    const t0 = Date.now();
+    try {
+      appLog.info(
+        vendor,
+        'boot',
+        `Calculando os contadores de syslog de "${site.name}" (acontece uma única vez; em disco lento pode levar vários minutos)`
+      );
+      await pgStore.backfillSyslogStats(site.id);
+      await rebuildRuntime(site);
+      appLog.info(
+        vendor,
+        'boot',
+        `Contadores de syslog de "${site.name}" prontos em ${((Date.now() - t0) / 1000).toFixed(1)}s`
+      );
+    } catch (err) {
+      appLog.error(
+        vendor,
+        'boot',
+        `Falha ao calcular os contadores de syslog de "${site.name}"`,
+        err instanceof Error ? err.message : String(err)
+      );
+    } finally {
+      statsBackfilling.delete(site.id);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -739,7 +778,13 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
       }
       for (const site of Object.values(store.sites)) {
         const rt = emptyRuntime();
-        applyDbStats(rt, await pgStore.loadSyslogStats(site.id));
+        const stats = await pgStore.loadSyslogStats(site.id);
+        if (stats) {
+          applyDbStats(rt, stats);
+        } else {
+          addEventsToRuntime(rt, site.syslogs);
+          void ensureStatsBackfilled(site);
+        }
         runtimes.set(site.id, rt);
       }
       await refreshStoreSize();
