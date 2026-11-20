@@ -108,7 +108,7 @@ export function TopBar({
   };
 
   return (
-    <header className="h-16 bg-white border-b border-[var(--fw-border)] px-3 sm:px-6 flex items-center justify-between gap-6 shrink-0">
+    <header className="brand-topline h-16 bg-white border-b border-[var(--fw-border)] px-3 sm:px-6 flex items-center justify-between gap-6 shrink-0">
       <div className="flex items-center gap-2 text-sm min-w-0">
         {onToggleMenu && (
           <button
@@ -336,7 +336,7 @@ export function TopBar({
           onClick={onGoToConnect}
           aria-label="Conectar ou Importar"
           title="Conectar ou Importar"
-          className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--fw-accent-mid)]"
+          className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium text-white bg-[var(--fw-cta)] rounded-md hover:bg-[var(--fw-cta-hover)] transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--fw-accent-mid)]"
         >
           <Upload className="w-3.5 h-3.5" aria-hidden="true" />
           <span className="hidden md:inline">Conectar ou Importar</span>

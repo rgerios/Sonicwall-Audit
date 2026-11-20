@@ -13,6 +13,7 @@ import {
   Terminal,
 } from 'lucide-react';
 import type { ActiveSection, AuditOverview, FirewallVendor } from '../types.ts';
+import sonicwallLogo from '../assets/images/sonicwall-logo.png';
 import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
 
 interface SidebarProps {
@@ -111,11 +112,23 @@ export function Sidebar({
                 FW Audit
               </span>
               <span className="text-[10px] font-medium text-[var(--fw-text-muted)] block mt-0.5 truncate">
-                {theme.label} · {theme.platformSubtitle}
+                {vendor === 'sonicwall' ? 'Auditoria de firewall' : `${theme.label} · ${theme.platformSubtitle}`}
               </span>
             </div>
           </div>
         </div>
+
+        {vendor === 'sonicwall' && (
+          <div className="px-3 pt-3">
+            {/* Fundo branco fixo (não segue o tema escuro): o logotipo é cinza e laranja */}
+            <div className="rounded-lg bg-[#ffffff] border border-[var(--fw-border)] px-3 py-2 flex items-center justify-between gap-2">
+              <img src={sonicwallLogo} alt="SonicWall" className="h-[18px] w-auto" draggable={false} />
+              <span className="text-[10px] font-medium uppercase tracking-wider text-[#556363] whitespace-nowrap">
+                {theme.platformSubtitle}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Seletor de Ambiente / Vendor (Azul Pastel vs Vermelho Pastel) */}
         <div className="p-3 border-b border-[var(--fw-border)] bg-[var(--fw-surface-alt)] space-y-1.5">
@@ -134,13 +147,13 @@ export function Sidebar({
               onClick={() => onSelectVendor('sonicwall')}
               className={`flex items-center justify-center gap-1.5 py-1.5 px-2 text-xs font-semibold rounded transition-colors ${
                 vendor === 'sonicwall'
-                  ? 'bg-[#1D4E89] text-white'
-                  : 'text-[#1A365D] hover:bg-[#E9F0FA]'
+                  ? 'bg-[var(--fw-accent)] text-white'
+                  : 'text-[var(--fw-text-body)] hover:bg-[var(--fw-surface-alt)]'
               }`}
             >
               <span
                 className={`w-2 h-2 rounded-full ${
-                  vendor === 'sonicwall' ? 'bg-[#C3D9F5]' : 'bg-[#2B6CB0]'
+                  vendor === 'sonicwall' ? 'bg-[var(--fw-brand)]' : 'bg-[var(--fw-brand)]'
                 }`}
                 aria-hidden="true"
               />
@@ -154,7 +167,7 @@ export function Sidebar({
               className={`flex items-center justify-center gap-1.5 py-1.5 px-2 text-xs font-semibold rounded transition-colors ${
                 vendor === 'fortigate'
                   ? 'bg-[#9B2C2C] text-white'
-                  : 'text-[#4A1818] hover:bg-[#F9EAEA]'
+                  : 'text-[var(--fw-text-body)] hover:bg-[var(--fw-surface-alt)]'
               }`}
             >
               <span

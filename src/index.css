@@ -6,34 +6,39 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
+/* SonicWall: identidade inspirada no site oficial (fundo quente, carvão #1F2929, laranja e azul da marca) */
 :root,
 [data-vendor="sonicwall"] {
-  --fw-bg: #F3F7FC;
-  --fw-bg-input: #F8FBFF;
-  --fw-surface: #E9F0FA;
-  --fw-surface-alt: #DFEAFA;
-  --fw-surface-soft: #EEF4FC;
-  --fw-surface-chip: #D6E4F7;
-  --fw-border: #CAD9EE;
-  --fw-border-strong: #AFC5E5;
-  --fw-border-soft: #E1EAF7;
-  --fw-heading: #102A43;
-  --fw-text: #1A365D;
-  --fw-text-body: #243B53;
-  --fw-text-muted: #486581;
-  --fw-text-subtle: #627D98;
-  --fw-text-faint: #829AB1;
-  --fw-accent: #1D4E89;
-  --fw-accent-hover: #163D6B;
-  --fw-accent-mid: #2B6CB0;
-  --fw-accent-on-dark: #C3D9F5;
-  --fw-terminal-bg: #0F1E33;
-  --fw-terminal-text: #E6EFFA;
+  --font-display: "Barlow", "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --fw-bg: #EFEDEB;
+  --fw-bg-input: #F8F6F4;
+  --fw-surface: #F5F3F1;
+  --fw-surface-alt: #E9E6E2;
+  --fw-surface-soft: #F8F6F4;
+  --fw-surface-chip: #DEDAD5;
+  --fw-border: #DAD5D0;
+  --fw-border-strong: #BFB8B1;
+  --fw-border-soft: #E8E4E0;
+  --fw-heading: #1F2929;
+  --fw-text: #1F2929;
+  --fw-text-body: #2C3A3A;
+  --fw-text-muted: #556363;
+  --fw-text-subtle: #6C7878;
+  --fw-text-faint: #8A9494;
+  --fw-accent: #1F2929;
+  --fw-accent-hover: #101818;
+  --fw-accent-mid: #0075DB;
+  --fw-accent-on-dark: #8DC1FC;
+  --fw-brand: #FF6E42;
+  --fw-cta: #CF4A1B;
+  --fw-cta-hover: #B03E15;
+  --fw-terminal-bg: #131B1B;
+  --fw-terminal-text: #E6EEEE;
   /* Efeito de fundo (campo de partículas + brilho nos painéis) */
-  --fx-rest: rgba(120, 150, 200, 0.2);
-  --fx-hue-base: 190;
-  --fx-hue-range: 70;
-  --fx-glow: rgba(34, 211, 238, 0.13);
+  --fx-rest: rgba(110, 130, 150, 0.22);
+  --fx-hue-base: 208;
+  --fx-hue-range: 28;
+  --fx-glow: rgba(255, 110, 66, 0.10);
 }
 
 [data-vendor="fortigate"] {
@@ -56,6 +61,10 @@
   --fw-accent-hover: #7F2323;
   --fw-accent-mid: #C53030;
   --fw-accent-on-dark: #F8D0D0;
+  --fw-brand: #C53030;
+  --fw-cta: #9B2C2C;
+  --fw-cta-hover: #7F2323;
+  --font-display: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --fw-terminal-bg: #261010;
   --fw-terminal-text: #FCECEC;
   --fx-rest: rgba(200, 130, 130, 0.2);
@@ -64,8 +73,7 @@
   --fx-glow: rgba(248, 113, 113, 0.12);
 }
 
-[data-theme="dark"],
-[data-theme="dark"][data-vendor="sonicwall"] {
+[data-theme="dark"] {
   color-scheme: dark;
   --fw-bg: #0B1220;
   --fw-bg-input: #101A2E;
@@ -88,6 +96,34 @@
   --fw-accent-on-dark: #BFDBFE;
   --fw-terminal-bg: #060B14;
   --fw-terminal-text: #E2E8F0;
+}
+
+[data-theme="dark"][data-vendor="sonicwall"] {
+  color-scheme: dark;
+  --fw-bg: #0F1515;
+  --fw-bg-input: #151D1D;
+  --fw-surface: #1A2323;
+  --fw-surface-alt: #232E2E;
+  --fw-surface-soft: #172020;
+  --fw-surface-chip: #2C3939;
+  --fw-border: #2D3A3A;
+  --fw-border-strong: #425353;
+  --fw-border-soft: #222D2D;
+  --fw-heading: #F4F7F7;
+  --fw-text: #E6ECEC;
+  --fw-text-body: #CBD6D6;
+  --fw-text-muted: #9DAEAE;
+  --fw-text-subtle: #8A9B9B;
+  --fw-text-faint: #6F8080;
+  --fw-accent: #D4501F;
+  --fw-accent-hover: #B8431A;
+  --fw-accent-mid: #FF8A63;
+  --fw-accent-on-dark: #8DC1FC;
+  --fw-cta: #D4501F;
+  --fw-cta-hover: #B8431A;
+  --fw-terminal-bg: #0A0F0F;
+  --fw-terminal-text: #E6EEEE;
+  --fx-rest: rgba(150, 175, 195, 0.2);
 }
 
 [data-theme="dark"][data-vendor="fortigate"] {
@@ -145,6 +181,17 @@
 }
 
 [data-theme="dark"] .bg-emerald-50 {
+  background-color: rgba(16, 185, 129, 0.14) !important;
+}
+
+/* Variantes com opacidade (bg-red-50/90 etc.) também precisam de fundo escuro no tema escuro */
+[data-theme="dark"] [class*="bg-red-50/"] {
+  background-color: rgba(220, 38, 38, 0.14) !important;
+}
+[data-theme="dark"] [class*="bg-amber-50/"] {
+  background-color: rgba(217, 119, 6, 0.14) !important;
+}
+[data-theme="dark"] [class*="bg-emerald-50/"] {
   background-color: rgba(16, 185, 129, 0.14) !important;
 }
 
@@ -212,6 +259,27 @@
   .fx::before {
     display: none;
   }
+}
+
+/* Identidade SonicWall: botões em pílula, canto assinatura nos painéis e filete de marca no topo */
+[data-vendor="sonicwall"] button[class*="bg-[var(--fw-accent)]"],
+[data-vendor="sonicwall"] button[class*="bg-[var(--fw-cta)]"],
+[data-vendor="sonicwall"] a[class*="bg-[var(--fw-cta)]"] {
+  border-radius: 9999px;
+}
+[data-vendor="sonicwall"] .fx {
+  border-top-right-radius: 28px;
+}
+.brand-topline {
+  position: relative;
+}
+[data-vendor="sonicwall"] .brand-topline::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: linear-gradient(90deg, #ff6e41 0%, #fb9668 30%, #8dc1fc 65%, #0075db 100%);
+  pointer-events: none;
 }
 
 .tabular-nums {
