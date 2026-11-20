@@ -112,11 +112,25 @@ export function Sidebar({
                 FW Audit
               </span>
               <span className="text-[10px] font-medium text-[var(--fw-text-muted)] block mt-0.5 truncate">
-                {vendor === 'sonicwall' ? 'Auditoria de firewall' : `${theme.label} · ${theme.platformSubtitle}`}
+                Auditoria de firewall
               </span>
             </div>
           </div>
         </div>
+
+        {vendor === 'fortigate' && (
+          <div className="px-3 pt-3">
+            {/* Faixa de marca em texto: troque pelo logotipo oficial quando o arquivo for adicionado ao projeto */}
+            <div className="rounded-lg bg-[#ffffff] border border-[var(--fw-border)] px-3 py-2 flex items-center justify-between gap-2">
+              <span className="text-[15px] font-extrabold tracking-[0.14em] text-[#111111]">
+                FORTI<span className="text-[#DA291C]">GATE</span>
+              </span>
+              <span className="text-[10px] font-medium uppercase tracking-wider text-[#5f5f5f] whitespace-nowrap">
+                {theme.platformSubtitle}
+              </span>
+            </div>
+          </div>
+        )}
 
         {vendor === 'sonicwall' && (
           <div className="px-3 pt-3">
@@ -152,9 +166,7 @@ export function Sidebar({
               }`}
             >
               <span
-                className={`w-2 h-2 rounded-full ${
-                  vendor === 'sonicwall' ? 'bg-[var(--fw-brand)]' : 'bg-[var(--fw-brand)]'
-                }`}
+                className="w-2 h-2 rounded-full bg-[var(--fw-brand)]"
                 aria-hidden="true"
               />
               SonicWall
@@ -166,14 +178,12 @@ export function Sidebar({
               onClick={() => onSelectVendor('fortigate')}
               className={`flex items-center justify-center gap-1.5 py-1.5 px-2 text-xs font-semibold rounded transition-colors ${
                 vendor === 'fortigate'
-                  ? 'bg-[#9B2C2C] text-white'
+                  ? 'bg-[var(--fw-accent)] text-white'
                   : 'text-[var(--fw-text-body)] hover:bg-[var(--fw-surface-alt)]'
               }`}
             >
               <span
-                className={`w-2 h-2 rounded-full ${
-                  vendor === 'fortigate' ? 'bg-[#F8D0D0]' : 'bg-[#C53030]'
-                }`}
+                className="w-2 h-2 rounded-full bg-[var(--fw-brand)]"
                 aria-hidden="true"
               />
               FortiGate
