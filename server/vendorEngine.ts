@@ -2443,9 +2443,23 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
   let scheduledSyncRunning = false;
 
   async function init(): Promise<void> {
+    const t0 = Date.now();
+    const lap = (label: string) =>
+      appLog.info(vendor, 'boot', `${label} (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
     await loadStoreFromStorage();
-    await purgeExpiredAcrossAllSites();
-    await evaluateAllSites();
+    lap('Dados carregados do armazenamento');
+    // Limpeza de retenção e primeira avaliação de alertas rodam em segundo plano: com milhões de
+    // syslogs acumulados elas levam minutos e não devem segurar a inicialização da API.
+    void (async () => {
+      try {
+        await purgeExpiredAcrossAllSites();
+        lap('Limpeza de retenção concluída');
+        await evaluateAllSites();
+        lap('Alertas avaliados');
+      } catch (err) {
+        console.error(`[${vendor}] Falha na manutenção inicial:`, err);
+      }
+    })();
 
     timers.push(setInterval(flushUdpBuffer, 250));
     timers.push(setInterval(() => void flushPendingInserts(), 1000));

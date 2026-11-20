@@ -15,37 +15,13 @@ const pgStore = new PostgresStore();
 const authManager = new AuthManager(DATA_DIR, pgStore);
 
 async function startApp(): Promise<void> {
-  await pgStore.init();
-  await authManager.init();
-
   const engines: VendorEngineInstance[] = [];
-  if (FW_VENDOR_MODE === 'sonicwall' || FW_VENDOR_MODE === 'both') {
-    const sw = createVendorEngine({
-      vendor: 'sonicwall',
-      dataDir: DATA_DIR,
-      pgStore,
-      authManager,
-    });
-    await sw.init();
-    engines.push(sw);
-  }
-  if (FW_VENDOR_MODE === 'fortigate' || FW_VENDOR_MODE === 'both') {
-    const fg = createVendorEngine({
-      vendor: 'fortigate',
-      dataDir: DATA_DIR,
-      pgStore,
-      authManager,
-    });
-    await fg.init();
-    engines.push(fg);
-  }
-
-  // Automatic hourly purge across active vendor engines
-  const purgeTimer = setInterval(() => {
-    for (const eng of engines) {
-      void eng.purgeExpired();
-    }
-  }, 60 * 60 * 1000);
+  const bootStartedAt = Date.now();
+  // O backend abre a porta antes de carregar o banco: com muitos syslogs acumulados a carga
+  // inicial leva minutos e o health check do Docker marcava o container como "unhealthy".
+  // Até ficar pronto, a API responde 503 e /api/health informa ready=false.
+  let apiRouter: express.Router | null = null;
+  let bootError: string | null = null;
 
   const app = express();
   app.disable('x-powered-by');
@@ -77,10 +53,13 @@ async function startApp(): Promise<void> {
     parser(req, res, next);
   });
 
-  // Public health check
+  // Public health check (sempre responde; "ready" indica se a carga inicial terminou)
   app.get('/api/health', (_req, res) => {
     res.json({
       ok: true,
+      ready: apiRouter !== null,
+      bootError,
+      uptimeSeconds: Math.round((Date.now() - bootStartedAt) / 1000),
       service: 'FW Audit',
       mode: FW_VENDOR_MODE,
       vendors: engines.map((e) => e.vendor),
@@ -88,15 +67,116 @@ async function startApp(): Promise<void> {
     });
   });
 
+  app.use('/api', (req, res, next) => {
+    if (apiRouter) {
+      apiRouter(req, res, next);
+      return;
+    }
+    res.setHeader('Retry-After', '5');
+    res.status(503).json({
+      error: bootError
+        ? `Falha ao iniciar: ${bootError}`
+        : 'O servidor está carregando os dados do banco. Tente novamente em instantes.',
+      ready: false,
+    });
+  });
+
+  if (process.env.SERVE_STATIC === 'false') {
+    app.get('/', (_req, res) => {
+      res.json({
+        service: 'FW Audit Backend API',
+        mode: FW_VENDOR_MODE,
+        vendors: engines.map((e) => e.vendor),
+        ok: true,
+        ready: apiRouter !== null,
+        storage: pgStore.isEnabled() ? 'postgresql' : 'local-json',
+      });
+    });
+  } else if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distDir = path.resolve(process.cwd(), 'dist');
+    app.use(express.static(distDir));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.join(distDir, 'index.html'));
+    });
+  }
+
+  const httpServer = app.listen(PORT, '0.0.0.0', () => {
+    console.log(
+      `FW Audit (${FW_VENDOR_MODE}) escutando em http://0.0.0.0:${PORT} [storage=${pgStore.isEnabled() ? 'postgresql' : 'local-json'}]; carregando dados...`
+    );
+  });
+
+  let purgeTimer: NodeJS.Timeout | null = null;
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[${signal}] Encerrando: gravando dados pendentes...`);
+    if (purgeTimer) clearInterval(purgeTimer);
+    httpServer.close();
+    try {
+      await Promise.all(engines.map((e) => e.shutdown()));
+      await pgStore.close();
+    } catch (err) {
+      console.error('Erro ao encerrar:', err);
+    }
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+
+  // --- Carga pesada (banco, autenticação, motores) ---------------------------------
+  const lap = (label: string) =>
+    console.log(`[boot] ${label} (${((Date.now() - bootStartedAt) / 1000).toFixed(1)}s desde o início)`);
+
+  try {
+    await pgStore.init();
+    lap('PostgreSQL pronto');
+    await authManager.init();
+    lap('Autenticação pronta');
+
+    if (FW_VENDOR_MODE === 'sonicwall' || FW_VENDOR_MODE === 'both') {
+      const sw = createVendorEngine({ vendor: 'sonicwall', dataDir: DATA_DIR, pgStore, authManager });
+      await sw.init();
+      engines.push(sw);
+    }
+    if (FW_VENDOR_MODE === 'fortigate' || FW_VENDOR_MODE === 'both') {
+      const fg = createVendorEngine({ vendor: 'fortigate', dataDir: DATA_DIR, pgStore, authManager });
+      await fg.init();
+      engines.push(fg);
+    }
+    lap('Motores iniciados');
+  } catch (err) {
+    bootError = err instanceof Error ? err.message : String(err);
+    console.error('Erro fatal ao iniciar servidor FW Audit:', err);
+    process.exit(1);
+  }
+
+  // Automatic hourly purge across active vendor engines
+  purgeTimer = setInterval(() => {
+    for (const eng of engines) {
+      void eng.purgeExpired();
+    }
+  }, 60 * 60 * 1000);
+
+  const api = express.Router();
+
   // Shared authentication endpoints (valid across both SonicWall & FortiGate containers)
-  app.get('/api/auth/status', async (req, res) => {
+  api.get('/auth/status', async (req, res) => {
     if (pgStore.isEnabled() && authManager.needsSetup()) {
       await authManager.init();
     }
     res.json(authManager.getStatus(req));
   });
 
-  app.post('/api/auth/setup', async (req, res) => {
+  api.post('/auth/setup', async (req, res) => {
     try {
       const username = String(req.body?.username || '').trim();
       const password = String(req.body?.password || '');
@@ -109,7 +189,7 @@ async function startApp(): Promise<void> {
     }
   });
 
-  app.post('/api/auth/login', async (req, res) => {
+  api.post('/auth/login', async (req, res) => {
     if (pgStore.isEnabled()) {
       await authManager.init();
     }
@@ -141,15 +221,14 @@ async function startApp(): Promise<void> {
     res.json({ ok: true, username: authedUser });
   });
 
-  app.post('/api/auth/logout', (req, res) => {
+  api.post('/auth/logout', (req, res) => {
     authManager.clearSessionCookie(req, res);
     res.json({ ok: true });
   });
 
-  // Auth guard protecting all /api/* routes (including /api/sonicwall/* and /api/fortigate/*)
-  app.use('/api', async (req, res, next) => {
+  // Auth guard protecting all remaining /api/* routes (including /api/sonicwall/* and /api/fortigate/*)
+  api.use(async (req, res, next) => {
     if (
-      req.path === '/health' ||
       req.path === '/auth/status' ||
       req.path === '/auth/setup' ||
       req.path === '/auth/login' ||
@@ -172,7 +251,7 @@ async function startApp(): Promise<void> {
     next();
   });
 
-  app.post('/api/auth/change-password', async (req, res) => {
+  api.post('/auth/change-password', async (req, res) => {
     const username = authManager.getAuthenticatedUser(req);
     if (!username) {
       res.status(401).json({ error: 'Não autenticado.' });
@@ -192,64 +271,19 @@ async function startApp(): Promise<void> {
   });
 
   for (const eng of engines) {
-    app.use(`/api/${eng.vendor}`, eng.router);
+    api.use(`/${eng.vendor}`, eng.router);
   }
 
   // Backward-compatible fallback for single-vendor calls
   const sonic = engines.find((e) => e.vendor === 'sonicwall');
   if (sonic) {
-    app.use('/api', sonic.router);
+    api.use(sonic.router);
   }
 
-  if (process.env.SERVE_STATIC === 'false') {
-    app.get('/', (_req, res) => {
-      res.json({
-        service: 'FW Audit Backend API',
-        mode: FW_VENDOR_MODE,
-        vendors: engines.map((e) => e.vendor),
-        ok: true,
-        storage: pgStore.isEnabled() ? 'postgresql' : 'local-json',
-      });
-    });
-  } else if (process.env.NODE_ENV !== 'production') {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distDir = path.resolve(process.cwd(), 'dist');
-    app.use(express.static(distDir));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distDir, 'index.html'));
-    });
-  }
-
-  const httpServer = app.listen(PORT, '0.0.0.0', () => {
-    console.log(
-      `FW Audit (${FW_VENDOR_MODE}) ativo em http://0.0.0.0:${PORT} [storage=${pgStore.isEnabled() ? 'postgresql' : 'local-json'}]`
-    );
-  });
-
-  // Encerramento limpo: grava eventos e estado pendentes antes de sair
-  let shuttingDown = false;
-  const shutdown = async (signal: string) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    console.log(`[${signal}] Encerrando: gravando dados pendentes...`);
-    clearInterval(purgeTimer);
-    httpServer.close();
-    try {
-      await Promise.all(engines.map((e) => e.shutdown()));
-      await pgStore.close();
-    } catch (err) {
-      console.error('Erro ao encerrar:', err);
-    }
-    process.exit(0);
-  };
-  process.on('SIGTERM', () => void shutdown('SIGTERM'));
-  process.on('SIGINT', () => void shutdown('SIGINT'));
+  apiRouter = api;
+  console.log(
+    `FW Audit (${FW_VENDOR_MODE}) pronto em http://0.0.0.0:${PORT} [storage=${pgStore.isEnabled() ? 'postgresql' : 'local-json'}] em ${((Date.now() - bootStartedAt) / 1000).toFixed(1)}s`
+  );
 }
 
 startApp().catch((err) => {

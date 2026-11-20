@@ -138,16 +138,28 @@ function AppShell() {
     }
   }, [toastPopupsEnabled]);
 
+  const [booting, setBooting] = useState(false);
+
   const fetchAuthStatus = useCallback(async () => {
+    let retryLater = false;
     try {
       const res = await fetch('/api/auth/status');
       if (res.ok) {
         const data = (await res.json()) as AuthStatus;
         setAuth(data);
+        setBooting(false);
+      } else if (res.status === 503 || res.status === 502 || res.status === 504) {
+        // Backend ainda carregando o banco (ou reiniciando): tenta de novo em vez de mostrar o login
+        retryLater = true;
+        setBooting(true);
       }
+    } catch {
+      retryLater = true;
+      setBooting(true);
     } finally {
-      setAuthChecking(false);
+      if (!retryLater) setAuthChecking(false);
     }
+    if (retryLater) setTimeout(() => void fetchAuthStatus(), 3000);
   }, []);
 
   useEffect(() => {
@@ -287,7 +299,14 @@ function AppShell() {
   if (authChecking) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6">
-        <div className="w-full max-w-md h-64 bg-white border border-[var(--fw-border)] rounded-lg animate-pulse" />
+        <div className="w-full max-w-md bg-white border border-[var(--fw-border)] rounded-lg p-8 text-center">
+          <div className="h-2 w-40 mx-auto rounded bg-[var(--fw-surface-alt)] animate-pulse" />
+          <p className="mt-4 text-xs text-[var(--fw-text-muted)]" role="status">
+            {booting
+              ? 'Iniciando o servidor e carregando os dados do banco. Isso pode levar alguns minutos na primeira subida…'
+              : 'Carregando…'}
+          </p>
+        </div>
       </div>
     );
   }
