@@ -45,7 +45,7 @@ export function LoginView({ needsSetup, onAuthenticated }: LoginViewProps) {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--fw-bg)] text-[var(--fw-text)] flex items-center justify-center p-6">
+    <div className="min-h-screen text-[var(--fw-text)] flex items-center justify-center p-6">
       <div className="w-full max-w-md bg-white border border-[var(--fw-border)] rounded-lg overflow-hidden">
         <div className="bg-[var(--fw-surface)] border-b border-[var(--fw-border)] px-6 py-5 flex items-center gap-3">
           <div className="w-9 h-9 rounded-md bg-[var(--fw-accent)] text-white flex items-center justify-center shrink-0">

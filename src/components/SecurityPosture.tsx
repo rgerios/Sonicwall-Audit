@@ -100,7 +100,7 @@ export function SecurityPosture({ vendor, overview, onNavigate }: SecurityPostur
   return (
     <section
       aria-label="Postura de segurança"
-      className="bg-white border border-[var(--fw-border)] rounded-xl p-5 flex flex-col md:flex-row gap-5"
+      className="fx bg-white border border-[var(--fw-border)] rounded-xl p-5 flex flex-col md:flex-row gap-5"
     >
       <div className="flex md:flex-col items-center md:items-start gap-4 md:w-44 shrink-0">
         <ScoreRing score={posture.score} grade={posture.grade} />

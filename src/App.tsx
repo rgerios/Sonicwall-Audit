@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { ParticleBackground } from './components/ParticleBackground.tsx';
 import { CommandPalette } from './components/CommandPalette.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { LoginView } from './components/LoginView.tsx';
@@ -78,7 +79,7 @@ function readInitialToastPopups(): boolean {
   }
 }
 
-export default function App() {
+function AppShell() {
   const [activeVendor, setActiveVendor] = useState<FirewallVendor>(readInitialVendor);
   const [colorMode, setColorMode] = useState<'light' | 'dark'>(readInitialColorMode);
   const [toastPopupsEnabled, setToastPopupsEnabled] = useState<boolean>(readInitialToastPopups);
@@ -282,7 +283,7 @@ export default function App() {
 
   if (authChecking) {
     return (
-      <div className="min-h-screen bg-[var(--fw-bg)] flex items-center justify-center p-6">
+      <div className="min-h-screen flex items-center justify-center p-6">
         <div className="w-full max-w-md h-64 bg-white border border-[var(--fw-border)] rounded-lg animate-pulse" />
       </div>
     );
@@ -298,7 +299,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[var(--fw-bg)] text-[var(--fw-text)] flex transition-colors">
+    <div className="min-h-screen text-[var(--fw-text)] flex transition-colors">
       <Sidebar
         vendor={activeVendor}
         onSelectVendor={handleSelectVendor}
@@ -466,5 +467,17 @@ export default function App() {
         />
       )}
     </div>
+  );
+}
+
+/** O fundo vive fora do shell: o campo de partículas fica atrás de qualquer tela (login, painel, carregando). */
+export default function App() {
+  return (
+    <>
+      <ParticleBackground />
+      <div className="relative z-[1]">
+        <AppShell />
+      </div>
+    </>
   );
 }

@@ -1266,7 +1266,7 @@ export function OverviewView({
                 setDragOverId(null);
                 setArmedDragId(null);
               }}
-              className={`bg-white rounded-lg border transition-colors ${
+              className={`fx bg-white rounded-lg border transition-colors ${
                 widget.span === 2 ? 'lg:col-span-2' : 'lg:col-span-1'
               } ${
                 isDropTarget

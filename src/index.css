@@ -29,6 +29,11 @@
   --fw-accent-on-dark: #C3D9F5;
   --fw-terminal-bg: #0F1E33;
   --fw-terminal-text: #E6EFFA;
+  /* Efeito de fundo (campo de partículas + brilho nos painéis) */
+  --fx-rest: rgba(120, 150, 200, 0.2);
+  --fx-hue-base: 190;
+  --fx-hue-range: 70;
+  --fx-glow: rgba(34, 211, 238, 0.13);
 }
 
 [data-vendor="fortigate"] {
@@ -53,6 +58,10 @@
   --fw-accent-on-dark: #F8D0D0;
   --fw-terminal-bg: #261010;
   --fw-terminal-text: #FCECEC;
+  --fx-rest: rgba(200, 130, 130, 0.2);
+  --fx-hue-base: 355;
+  --fx-hue-range: 45;
+  --fx-glow: rgba(248, 113, 113, 0.12);
 }
 
 [data-theme="dark"],
@@ -181,6 +190,30 @@
   }
 }
 
+/* Brilho radial que segue o ponteiro (ver src/effects/pointerGlow.ts). Classe opcional. */
+.fx {
+  position: relative;
+  isolation: isolate;
+}
+.fx::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(
+    260px circle at var(--mx, -400px) var(--my, -400px),
+    var(--fx-glow, rgba(34, 211, 238, 0.13)),
+    transparent 65%
+  );
+}
+@media (prefers-reduced-motion: reduce) {
+  .fx::before {
+    display: none;
+  }
+}
+
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
@@ -191,6 +224,7 @@
   }
   aside,
   header,
+  .fx-canvas,
   .no-print {
     display: none !important;
   }
