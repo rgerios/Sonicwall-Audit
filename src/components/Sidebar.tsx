@@ -25,6 +25,8 @@ interface SidebarProps {
   onSelectSite: (siteId: string) => void;
   onOpenPasswordModal: () => void;
   onLogout: () => void;
+  /** Em telas estreitas o menu é uma gaveta; controla se está aberta. */
+  mobileOpen?: boolean;
 }
 
 export function Sidebar({
@@ -37,6 +39,7 @@ export function Sidebar({
   onSelectSite,
   onOpenPasswordModal,
   onLogout,
+  mobileOpen = false,
 }: SidebarProps) {
   const theme = VENDOR_THEMES[vendor];
 
@@ -93,7 +96,12 @@ export function Sidebar({
   const activeSite = overview?.activeSite;
 
   return (
-    <aside className="w-64 shrink-0 border-r border-[var(--fw-border)] bg-[var(--fw-surface)] flex flex-col justify-between min-h-screen transition-colors">
+    <aside
+      id="app-sidebar"
+      className={`w-64 shrink-0 border-r border-[var(--fw-border)] bg-[var(--fw-surface)] flex flex-col justify-between min-h-screen transition-transform lg:transition-colors
+        fixed inset-y-0 left-0 z-50 overflow-y-auto lg:static lg:z-auto lg:overflow-visible lg:translate-x-0
+        ${mobileOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full'}`}
+    >
       <div>
         <div className="px-5 h-16 flex items-center justify-between gap-2 border-b border-[var(--fw-border)]">
           <div className="flex items-center gap-2.5 min-w-0">

@@ -8,9 +8,11 @@ import {
   TerminalSquare,
 } from 'lucide-react';
 import type { FirewallVendor, NatPolicy } from '../types.ts';
+import { downloadCsv } from '../utils/csv.ts';
 import { vendorApiUrl } from '../utils/vendorApi.ts';
 import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
 import { CliScriptModal } from './CliScriptModal.tsx';
+import { SelectionImpact } from './SelectionImpact.tsx';
 
 interface UnusedNatsViewProps {
   vendor: FirewallVendor;
@@ -98,46 +100,15 @@ export function UnusedNatsView({ vendor, refreshToken, onGoToConnect }: UnusedNa
   };
 
   const handleExportCsv = () => {
-    const header = [
-      'ID',
-      'Nome',
-      'Status',
-      'Interface_Entrada',
-      'Interface_Saida',
-      'Orig_Src',
-      'Trans_Src',
-      'Orig_Dst',
-      'Trans_Dst',
-      'Orig_Svc',
-      'Trans_Svc',
-      'Hits_Appliance',
-      'Hits_Syslog',
-      'Motivo',
-    ];
-    const rows = filteredNats.map((n) => [
-      n.id,
-      `"${n.name.replace(/"/g, '""')}"`,
-      n.status,
-      n.inboundInterface,
-      n.outboundInterface,
-      `"${n.origSource}"`,
-      `"${n.transSource}"`,
-      `"${n.origDestination}"`,
-      `"${n.transDestination}"`,
-      `"${n.origService}"`,
-      `"${n.transService}"`,
-      String(n.applianceHits),
-      String(n.syslogHits),
-      `"${n.findingReason.replace(/"/g, '""')}"`,
-    ]);
-    const csv = [header.join(','), ...rows.map((row) => row.join(','))].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${vendor}-nats-auditoria.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(
+      `${vendor}-nats-auditoria.csv`,
+      ['ID', 'Nome', 'Status', 'Interface_Entrada', 'Interface_Saida', 'Orig_Src', 'Trans_Src', 'Orig_Dst', 'Trans_Dst', 'Orig_Svc', 'Trans_Svc', 'Hits_Appliance', 'Hits_Syslog', 'Motivo'],
+      filteredNats.map((n) => [
+        n.id, n.name, n.status, n.inboundInterface, n.outboundInterface, n.origSource, n.transSource,
+        n.origDestination, n.transDestination, n.origService, n.transService, n.applianceHits,
+        n.syslogHits, n.findingReason,
+      ])
+    );
   };
 
   const renderStatus = (status: NatPolicy['status']) => {
@@ -267,6 +238,11 @@ export function UnusedNatsView({ vendor, refreshToken, onGoToConnect }: UnusedNa
           </button>
         </div>
       </div>
+
+      <SelectionImpact
+        noun={{ singular: 'NAT selecionado', plural: 'NATs selecionados' }}
+        items={nats.filter((n) => selectedIds.includes(n.id))}
+      />
 
       <div className="bg-white border border-[var(--fw-border)] rounded-lg overflow-hidden">
         <div className="px-4 py-2.5 border-b border-[var(--fw-border)] bg-[var(--fw-surface)] flex items-center justify-between text-xs text-[var(--fw-text-body)]">

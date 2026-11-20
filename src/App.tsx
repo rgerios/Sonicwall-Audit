@@ -71,9 +71,10 @@ function readInitialColorMode(): 'light' | 'dark' {
 
 function readInitialToastPopups(): boolean {
   try {
-    return localStorage.getItem(TOAST_POPUPS_STORAGE_KEY) !== 'false';
+    // Desligado por padrão: os popups cobriam o conteúdo; quem já ativou mantém a escolha
+    return localStorage.getItem(TOAST_POPUPS_STORAGE_KEY) === 'true';
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -94,6 +95,7 @@ export default function App() {
   const [pendingSyslogQuery, setPendingSyslogQuery] = useState<string | null>(null);
   const [openAlertConfigSignal, setOpenAlertConfigSignal] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -301,13 +303,26 @@ export default function App() {
         vendor={activeVendor}
         onSelectVendor={handleSelectVendor}
         activeSection={activeSection}
-        onSelectSection={setActiveSection}
+        onSelectSection={(section) => {
+          setActiveSection(section);
+          setMenuOpen(false);
+        }}
+        mobileOpen={menuOpen}
         overview={overview}
         authUsername={auth.username}
         onSelectSite={(siteId) => void handleSelectSite(siteId)}
         onOpenPasswordModal={() => setShowPasswordModal(true)}
         onLogout={() => void handleLogout()}
       />
+
+      {menuOpen && (
+        <button
+          type="button"
+          aria-label="Fechar menu"
+          onClick={() => setMenuOpen(false)}
+          className="fixed inset-0 z-40 bg-black/40 lg:hidden"
+        />
+      )}
 
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar
@@ -321,13 +336,15 @@ export default function App() {
           onInvestigateSyslog={handleInvestigateSyslog}
           loadingSample={loadingSample}
           onOpenPalette={() => setPaletteOpen(true)}
+          onToggleMenu={() => setMenuOpen((open) => !open)}
+          menuOpen={menuOpen}
           toastPopupsEnabled={toastPopupsEnabled}
           onToggleToastPopups={() => setToastPopupsEnabled((v) => !v)}
           colorMode={colorMode}
           onToggleColorMode={() => setColorMode((m) => (m === 'dark' ? 'light' : 'dark'))}
         />
 
-        <main className="flex-1 p-6 max-w-[1440px] w-full mx-auto">
+        <main className="flex-1 p-3 sm:p-6 max-w-[1440px] w-full mx-auto min-w-0">
           <ErrorBoundary resetKey={`${activeVendor}:${activeSection}`}>
             <Suspense fallback={<ViewFallback />}>
               {activeSection === 'overview' && (

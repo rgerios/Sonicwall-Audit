@@ -9,9 +9,11 @@ import {
   TerminalSquare,
 } from 'lucide-react';
 import type { FirewallRule, FirewallVendor } from '../types.ts';
+import { downloadCsv } from '../utils/csv.ts';
 import { vendorApiUrl } from '../utils/vendorApi.ts';
 import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
 import { CliScriptModal } from './CliScriptModal.tsx';
+import { SelectionImpact } from './SelectionImpact.tsx';
 
 interface UnusedRulesViewProps {
   vendor: FirewallVendor;
@@ -100,42 +102,14 @@ export function UnusedRulesView({ vendor, refreshToken, onGoToConnect }: UnusedR
   };
 
   const handleExportCsv = () => {
-    const header = [
-      'ID',
-      'Nome',
-      'Status',
-      'Origem_Zona',
-      'Destino_Zona',
-      'Source',
-      'Destination',
-      'Service',
-      'Acao',
-      'Hits_Appliance',
-      'Hits_Syslog',
-      'Motivo',
-    ];
-    const rows = filteredRules.map((r) => [
-      r.id,
-      `"${r.name.replace(/"/g, '""')}"`,
-      r.status,
-      r.fromZone,
-      r.toZone,
-      `"${r.source}"`,
-      `"${r.destination}"`,
-      `"${r.service}"`,
-      r.action,
-      String(r.applianceHits),
-      String(r.syslogHits),
-      `"${r.findingReason.replace(/"/g, '""')}"`,
-    ]);
-    const csv = [header.join(','), ...rows.map((row) => row.join(','))].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${vendor}-regras-auditoria.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadCsv(
+      `${vendor}-regras-auditoria.csv`,
+      ['ID', 'Nome', 'Status', 'Origem_Zona', 'Destino_Zona', 'Source', 'Destination', 'Service', 'Acao', 'Hits_Appliance', 'Hits_Syslog', 'Motivo'],
+      filteredRules.map((r) => [
+        r.id, r.name, r.status, r.fromZone, r.toZone, r.source, r.destination, r.service,
+        r.action, r.applianceHits, r.syslogHits, r.findingReason,
+      ])
+    );
   };
 
   const renderStatus = (status: FirewallRule['status']) => {
@@ -267,6 +241,11 @@ export function UnusedRulesView({ vendor, refreshToken, onGoToConnect }: UnusedR
           </button>
         </div>
       </div>
+
+      <SelectionImpact
+        noun={{ singular: 'regra selecionada', plural: 'regras selecionadas' }}
+        items={rules.filter((r) => selectedIds.includes(r.id))}
+      />
 
       <div className="bg-white border border-[var(--fw-border)] rounded-lg overflow-hidden">
         <div className="px-4 py-2.5 border-b border-[var(--fw-border)] bg-[var(--fw-surface)] flex items-center justify-between text-xs text-[var(--fw-text-body)]">

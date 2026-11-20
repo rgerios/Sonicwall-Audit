@@ -4,6 +4,7 @@ import {
   BellOff,
   BellRing,
   Database,
+  Menu,
   Moon,
   Search,
   Settings2,
@@ -32,6 +33,8 @@ interface TopBarProps {
   onInvestigateSyslog: (query: string) => void;
   loadingSample: boolean;
   onOpenPalette?: () => void;
+  onToggleMenu?: () => void;
+  menuOpen?: boolean;
   toastPopupsEnabled: boolean;
   onToggleToastPopups: () => void;
   colorMode: 'light' | 'dark';
@@ -49,6 +52,8 @@ export function TopBar({
   onInvestigateSyslog,
   loadingSample,
   onOpenPalette,
+  onToggleMenu,
+  menuOpen = false,
   toastPopupsEnabled,
   onToggleToastPopups,
   colorMode,
@@ -103,16 +108,28 @@ export function TopBar({
   };
 
   return (
-    <header className="h-16 bg-white border-b border-[var(--fw-border)] px-6 flex items-center justify-between gap-6 shrink-0">
+    <header className="h-16 bg-white border-b border-[var(--fw-border)] px-3 sm:px-6 flex items-center justify-between gap-6 shrink-0">
       <div className="flex items-center gap-2 text-sm min-w-0">
-        <span className="text-[var(--fw-text-muted)] whitespace-nowrap shrink-0">FW Audit</span>
-        <span className="text-[var(--fw-text-faint)]" aria-hidden="true">
+        {onToggleMenu && (
+          <button
+            type="button"
+            onClick={onToggleMenu}
+            aria-label="Abrir menu de navegação"
+            aria-expanded={menuOpen}
+            aria-controls="app-sidebar"
+            className="lg:hidden -ml-2 p-2 rounded-md text-[var(--fw-text-body)] hover:bg-[var(--fw-surface)] shrink-0"
+          >
+            <Menu className="w-5 h-5" aria-hidden="true" />
+          </button>
+        )}
+        <span className="text-[var(--fw-text-muted)] whitespace-nowrap shrink-0 hidden xl:inline">FW Audit</span>
+        <span className="text-[var(--fw-text-faint)] hidden xl:inline" aria-hidden="true">
           /
         </span>
-        <span className="font-medium text-[var(--fw-accent)] whitespace-nowrap shrink-0">
+        <span className="font-medium text-[var(--fw-accent)] whitespace-nowrap shrink-0 hidden xl:inline">
           {theme.label}
         </span>
-        <span className="text-[var(--fw-text-faint)]" aria-hidden="true">
+        <span className="text-[var(--fw-text-faint)] hidden xl:inline" aria-hidden="true">
           /
         </span>
         <h1 className="font-semibold text-[var(--fw-heading)] truncate">
@@ -130,7 +147,7 @@ export function TopBar({
         )}
       </div>
 
-      <div className="flex items-center gap-2.5 shrink-0">
+      <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
         {onOpenPalette && (
           <button
             type="button"
@@ -305,18 +322,24 @@ export function TopBar({
           type="button"
           onClick={onLoadSample}
           disabled={loadingSample}
+          aria-label={theme.sampleButtonLabel}
+          title={theme.sampleButtonLabel}
           className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] transition-colors whitespace-nowrap shrink-0 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--fw-accent-mid)]"
         >
           <Database className="w-3.5 h-3.5" aria-hidden="true" />
-          {loadingSample ? 'Carregando...' : theme.sampleButtonLabel}
+          <span className="hidden md:inline">
+            {loadingSample ? 'Carregando...' : theme.sampleButtonLabel}
+          </span>
         </button>
         <button
           type="button"
           onClick={onGoToConnect}
+          aria-label="Conectar ou Importar"
+          title="Conectar ou Importar"
           className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)] transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--fw-accent-mid)]"
         >
           <Upload className="w-3.5 h-3.5" aria-hidden="true" />
-          Conectar ou Importar
+          <span className="hidden md:inline">Conectar ou Importar</span>
         </button>
 
         <button

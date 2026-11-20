@@ -278,6 +278,52 @@ export function OverviewView({
           )}
         </p>
 
+        <ol className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-3 max-w-3xl list-none p-0" aria-label="Primeiros passos">
+          {[
+            {
+              title: 'Conecte o firewall',
+              done: Boolean(overview?.activeSite?.connection?.host),
+              text:
+                vendor === 'fortigate'
+                  ? 'Informe host, porta e token da API REST do FortiOS (ou importe a configuração).'
+                  : 'Informe host, usuário e senha da API SonicOS (ou importe o .exp / .json).',
+            },
+            {
+              title: 'Envie os syslogs',
+              done: Boolean(overview?.udpStatus?.lastPacketAt),
+              text: `Aponte o firewall para este servidor na porta ${vendor === 'fortigate' ? '5515' : '5514'}/UDP. É isso que comprova regras e NATs sem uso.`,
+            },
+            {
+              title: 'Revise os achados',
+              done: false,
+              text: 'Com dados carregados, a Visão Geral mostra a postura de segurança e o que tratar primeiro.',
+            },
+          ].map((step, index) => (
+            <li
+              key={step.title}
+              className={`rounded-lg border p-3 text-xs ${
+                step.done
+                  ? 'border-emerald-300 bg-emerald-50'
+                  : 'border-[var(--fw-border)] bg-[var(--fw-surface-soft)]'
+              }`}
+            >
+              <p className="font-semibold text-[var(--fw-heading)] flex items-center gap-2">
+                <span
+                  className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[11px] ${
+                    step.done ? 'bg-emerald-600 text-white' : 'bg-[var(--fw-accent)] text-white'
+                  }`}
+                  aria-hidden="true"
+                >
+                  {step.done ? '✓' : index + 1}
+                </span>
+                {step.title}
+                {step.done && <span className="sr-only"> (concluído)</span>}
+              </p>
+              <p className="mt-1.5 text-[var(--fw-text-muted)] leading-snug">{step.text}</p>
+            </li>
+          ))}
+        </ol>
+
         <div className="mt-6 flex flex-wrap items-center gap-3">
           <button
             type="button"
@@ -1020,7 +1066,7 @@ export function OverviewView({
             Sem portas registradas.
           </p>
         ) : (
-          <table className="w-full text-xs">
+          <div className="overflow-x-auto"><table className="w-full text-xs">
             <thead>
               <tr className="text-[var(--fw-text-muted)] border-b border-[var(--fw-border-soft)]">
                 <th className="py-2 text-left font-medium">Serviço / Porta</th>
@@ -1043,7 +1089,7 @@ export function OverviewView({
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         );
 
       case 'zone-traffic':
@@ -1052,7 +1098,7 @@ export function OverviewView({
             Sem fluxos de zona registrados.
           </p>
         ) : (
-          <table className="w-full text-xs">
+          <div className="overflow-x-auto"><table className="w-full text-xs">
             <thead>
               <tr className="text-[var(--fw-text-muted)] border-b border-[var(--fw-border-soft)]">
                 <th className="py-2 text-left font-medium">Origem → Destino</th>
@@ -1073,7 +1119,7 @@ export function OverviewView({
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         );
     }
   };

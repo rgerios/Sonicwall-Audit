@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useState } from 'react';
 import {
+  Download,
   Ban,
   Bot,
   CheckCircle2,
@@ -15,6 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import type { FirewallVendor, SyslogEvent } from '../types.ts';
+import { downloadCsv } from '../utils/csv.ts';
 import { vendorApiUrl } from '../utils/vendorApi.ts';
 import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
 import { IpConsumptionPanel } from './IpConsumptionPanel.tsx';
@@ -508,7 +510,7 @@ export function SyslogView({
             )}
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
           <label className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[var(--fw-text-body)] bg-[var(--fw-bg)] border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] cursor-pointer whitespace-nowrap">
             <FileUp className="w-3.5 h-3.5" />
             Importar .log/.txt
@@ -525,6 +527,22 @@ export function SyslogView({
             className="px-3 py-2 text-xs font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] whitespace-nowrap"
           >
             Colar Logs
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              downloadCsv(
+                `${vendor}-syslogs.csv`,
+                ['Data', 'Dispositivo', 'Severidade', 'Acao', 'Origem', 'Porta_Origem', 'Zona_Origem', 'Destino', 'Porta_Destino', 'Zona_Destino', 'Protocolo', 'Regra', 'Usuario', 'Bytes_Enviados', 'Bytes_Recebidos', 'Mensagem'],
+                events.map((ev) => [ev.timestamp, ev.firewallHost, ev.severity, ev.action, ev.srcIp, ev.srcPort, ev.srcZone, ev.dstIp, ev.dstPort, ev.dstZone, ev.protocol, ev.ruleRef, ev.user, ev.bytesSent, ev.bytesRcvd, ev.message])
+              )
+            }
+            disabled={events.length === 0}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[var(--fw-text-body)] bg-white border border-[var(--fw-border-strong)] rounded-md hover:bg-[var(--fw-surface)] disabled:opacity-40 whitespace-nowrap"
+            title="Exporta os logs atualmente carregados na tela (respeita os filtros)"
+          >
+            <Download className="w-3.5 h-3.5" />
+            CSV
           </button>
           <button
             type="button"
