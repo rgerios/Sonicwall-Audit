@@ -13,6 +13,7 @@ import {
   Terminal,
 } from 'lucide-react';
 import type { ActiveSection, AuditOverview, FirewallVendor } from '../types.ts';
+import fortinetLogo from '../assets/images/fortinet-logo.svg';
 import sonicwallLogo from '../assets/images/sonicwall-logo.png';
 import { VENDOR_THEMES } from '../utils/vendorTheme.ts';
 
@@ -120,11 +121,9 @@ export function Sidebar({
 
         {vendor === 'fortigate' && (
           <div className="px-3 pt-3">
-            {/* Faixa de marca em texto: troque pelo logotipo oficial quando o arquivo for adicionado ao projeto */}
-            <div className="rounded-lg bg-[#ffffff] border border-[var(--fw-border)] px-3 py-2 flex items-center justify-between gap-2">
-              <span className="text-[15px] font-extrabold tracking-[0.14em] text-[#111111]">
-                FORTI<span className="text-[#DA291C]">GATE</span>
-              </span>
+            {/* Fundo branco fixo (não segue o tema escuro): o logotipo é preto e vermelho */}
+            <div className="rounded-lg bg-[#ffffff] border border-[var(--fw-border)] px-3 py-2.5 flex items-center justify-between gap-2">
+              <img src={fortinetLogo} alt="Fortinet" className="h-[14px] w-auto" draggable={false} />
               <span className="text-[10px] font-medium uppercase tracking-wider text-[#5f5f5f] whitespace-nowrap">
                 {theme.platformSubtitle}
               </span>
