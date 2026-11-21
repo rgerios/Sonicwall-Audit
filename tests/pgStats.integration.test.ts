@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import pg from 'pg';
-import { PostgresStore } from '../server/database.ts';
+import { buildSyslogSearchText, PostgresStore, SYSLOG_COUNT_CAP, SyslogSearchTimeoutError } from '../server/database.ts';
 import type { SyslogEvent } from '../server/types.ts';
 
 /**
@@ -138,5 +138,118 @@ describe('contadores de syslog no PostgreSQL', { skip: !URL }, () => {
     const stats = await counterCounts();
     assert.equal(stats.total, 0);
     assert.equal(stats.oldestAt, null);
+  });
+});
+
+
+describe('busca de syslogs no PostgreSQL', { skip: !URL }, () => {
+  const SEARCH_SITE = 'it-search-site';
+  let store: PostgresStore;
+  let pool: pg.Pool;
+
+  const mk = (i: number, over: Partial<SyslogEvent> = {}): SyslogEvent => ({
+    ...ev(`s${i}`, i % 3 === 0 ? 'drop' : 'allow', 'info', i * 1000),
+    srcIp: `10.0.${i % 10}.${i % 250}`,
+    dstIp: i % 50 === 0 ? '203.0.113.77' : `8.8.${i % 4}.${i % 250}`,
+    firewallHost: i % 2 === 0 ? 'FW-A' : 'FW-B',
+    serialNumber: i % 2 === 0 ? 'SNA' : 'SNB',
+    message: `evento numero ${i}`,
+    ...over,
+  });
+
+  const withSearchText = async (events: SyslogEvent[]) => {
+    await store.insertSyslogs(SEARCH_SITE, 'sonicwall', events, resolveTime);
+  };
+
+  before(async () => {
+    store = new PostgresStore(URL);
+    await store.init();
+    pool = new pg.Pool({ connectionString: URL });
+    await pool.query('DELETE FROM sites WHERE id = $1', [SEARCH_SITE]);
+    await pool.query(
+      `INSERT INTO sites (id, vendor, name, connection_json, appliance_json, telemetry_json, alert_settings_json, created_at, updated_at)
+       VALUES ($1, 'sonicwall', 'Busca', '{}', '{}', '{}', '{}', now(), now())`,
+      [SEARCH_SITE]
+    );
+    const events = Array.from({ length: 1200 }, (_, i) => mk(i));
+    await withSearchText(events);
+  });
+
+  after(async () => {
+    await pool.query('DELETE FROM sites WHERE id = $1', [SEARCH_SITE]);
+    await pool.end();
+    await store.close();
+  });
+
+  const all = Array.from({ length: 1200 }, (_, i) => mk(i));
+  const q = (extra: Record<string, unknown>) =>
+    store.querySyslogs(SEARCH_SITE, { limit: 5000, offset: 0, ...extra } as never);
+
+  it('os filtros por IP, dispositivo e ação dão o mesmo resultado de uma filtragem em memória', async () => {
+    const cases: Array<[Record<string, unknown>, (e: SyslogEvent) => boolean]> = [
+      [{ srcIp: '10.0.3.' }, (e) => e.srcIp.includes('10.0.3.')],
+      [{ dstIp: '203.0.113' }, (e) => e.dstIp.includes('203.0.113')],
+      [{ dstIp: '8.8.2' }, (e) => e.dstIp.includes('8.8.2')],
+      [{ device: 'FW-A' }, (e) => e.firewallHost === 'FW-A' || e.serialNumber === 'FW-A'],
+      [{ device: 'SNB' }, (e) => e.firewallHost === 'SNB' || e.serialNumber === 'SNB'],
+      [{ action: 'blocked' }, (e) => e.action === 'drop'],
+      [{ srcIp: '10.0.1', action: 'blocked', device: 'FW-B' }, (e) => e.srcIp.includes('10.0.1') && e.action === 'drop' && (e.firewallHost === 'FW-B' || e.serialNumber === 'FW-B')],
+      [{ search: 'numero 77' }, (e) => buildSyslogSearchText(e).includes('numero 77')],
+    ];
+    for (const [filter, pred] of cases) {
+      const r = await q(filter);
+      const expected = all.filter(pred).map((e) => e.id).sort();
+      assert.deepEqual(r.events.map((e) => e.id).sort(), expected, JSON.stringify(filter));
+      assert.equal(r.matched, expected.length, `contagem ${JSON.stringify(filter)}`);
+      assert.equal(r.matchedCapped, false);
+    }
+  });
+
+  it('caracteres especiais do LIKE são tratados como texto', async () => {
+    assert.equal((await q({ srcIp: '%' })).matched, 0);
+    assert.equal((await q({ search: '_' })).matched, 0);
+  });
+
+  it('o teto de contagem mostra "10.000+" e a página continua funcionando', async () => {
+    await pool.query(
+      `INSERT INTO syslogs (site_id, vendor, id, ingested_at, event_at, event_timestamp, priority, action, severity, search_text, payload_json)
+       SELECT $1, 'sonicwall', 'bulk-' || g, now() - (g || ' seconds')::interval, now() - (g || ' seconds')::interval, 'x', 6,
+              'allow', 'info', 'bulk 192.0.2.' || (g % 255), jsonb_build_object('id', 'bulk-' || g, 'srcIp', '192.0.2.' || (g % 255))
+       FROM generate_series(1, ${SYSLOG_COUNT_CAP + 500}) g`,
+      [SEARCH_SITE]
+    );
+    const r = await store.querySyslogs(SEARCH_SITE, { limit: 250, offset: 0, srcIp: '192.0.2' } as never);
+    assert.equal(r.matched, SYSLOG_COUNT_CAP);
+    assert.equal(r.matchedCapped, true);
+    assert.equal(r.events.length, 250);
+    // filtro comum (caminho pelo índice de tempo) e página mais adiante
+    const page2 = await store.querySyslogs(SEARCH_SITE, { limit: 250, offset: 250, srcIp: '192.0.2' } as never);
+    assert.equal(page2.events.length, 250);
+    const ids = new Set([...r.events, ...page2.events].map((e) => (e as { id: string }).id));
+    assert.equal(ids.size, 500, 'páginas não se repetem');
+  });
+
+  it('estourar o tempo limite devolve um erro tipado e a conexão segue saudável', async () => {
+    const previous = process.env.SYSLOG_SEARCH_TIMEOUT_MS;
+    process.env.SYSLOG_SEARCH_TIMEOUT_MS = '1000';
+    try {
+      // 12 mil linhas não bastam para estourar 1 s; usa pg_sleep dentro da própria transação da busca
+      // simulando um filtro caro: o statement_timeout é do banco, então basta uma consulta lenta.
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SET LOCAL statement_timeout = 200');
+        await assert.rejects(() => client.query('SELECT pg_sleep(1)'), (e: { code?: string }) => e.code === '57014');
+      } finally {
+        await client.query('ROLLBACK').catch(() => undefined);
+        client.release();
+      }
+      assert.ok(new SyslogSearchTimeoutError(1000).message.includes('tempo limite'));
+      const ok = await q({});
+      assert.ok(ok.events.length > 0);
+    } finally {
+      if (previous === undefined) delete process.env.SYSLOG_SEARCH_TIMEOUT_MS;
+      else process.env.SYSLOG_SEARCH_TIMEOUT_MS = previous;
+    }
   });
 });

@@ -17,7 +17,7 @@ import {
 import { appLog } from './appLogger.ts';
 import type { AuthManager } from './authManager.ts';
 import type { PostgresStore, SyslogStats } from './database.ts';
-import { buildSyslogSearchText } from './database.ts';
+import { buildSyslogSearchText, SyslogSearchTimeoutError } from './database.ts';
 import {
   addEventsToRuntime,
   buildHourlyLogVolume,
@@ -1988,7 +1988,9 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
       if (usePg) {
         // Busca em todo o histórico retido, direto no banco
         await flushPendingInserts();
-        const result = await pgStore.querySyslogs(site.id, {
+        let result: Awaited<ReturnType<typeof pgStore.querySyslogs>>;
+        try {
+          result = await pgStore.querySyslogs(site.id, {
           search,
           srcIp,
           dstIp,
@@ -1999,7 +2001,25 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
           limit,
           offset,
         });
-        res.json({ total, matched: result.matched, events: result.events, devices, offset, limit });
+        } catch (err) {
+          if (err instanceof SyslogSearchTimeoutError) {
+            res.status(504).json({
+              error: `${err.message}. Restrinja o período ou os filtros e tente de novo.`,
+              code: 'timeout',
+            });
+            return;
+          }
+          throw err;
+        }
+        res.json({
+          total,
+          matched: result.matched,
+          matchedCapped: result.matchedCapped,
+          events: result.events,
+          devices,
+          offset,
+          limit,
+        });
         return;
       }
 
@@ -2025,6 +2045,7 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
       res.json({
         total,
         matched: filtered.length,
+        matchedCapped: false,
         events: filtered.slice(offset, offset + limit),
         devices,
         offset,

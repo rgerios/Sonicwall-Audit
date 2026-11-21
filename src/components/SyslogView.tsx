@@ -42,6 +42,8 @@ export function SyslogView({
   const [events, setEvents] = useState<SyslogEvent[]>([]);
   const [total, setTotal] = useState(0);
   const [matched, setMatched] = useState(0);
+  const [matchedCapped, setMatchedCapped] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const [query, setQuery] = useState('');
@@ -144,10 +146,22 @@ export function SyslogView({
         });
         setTotal(data.total || 0);
         setMatched(data.matched || 0);
+        setMatchedCapped(Boolean(data.matchedCapped));
+        setSearchError(null);
         if (Array.isArray(data.devices)) {
           setDevices(data.devices);
         }
+      } else {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        setSearchError(data.error || `A busca falhou (HTTP ${res.status}).`);
+        if (offset === 0) {
+          setEvents([]);
+          setMatched(0);
+          setMatchedCapped(false);
+        }
       }
+    } catch {
+      setSearchError('Não foi possível consultar os syslogs. Verifique a conexão com o servidor.');
     } finally {
       setLoading(false);
       setLoadingMore(false);
@@ -651,10 +665,23 @@ export function SyslogView({
         <div className="px-4 py-2.5 border-b border-[var(--fw-border)] bg-[var(--fw-surface)] flex items-center justify-between text-xs text-[var(--fw-text-body)]">
           <span className="tabular-nums">
             Exibindo {events.length.toLocaleString('pt-BR')} de{' '}
-            {matched.toLocaleString('pt-BR')} correspondências ({total.toLocaleString('pt-BR')} total)
+            {matched.toLocaleString('pt-BR')}
+            {matchedCapped ? '+' : ''} correspondências ({total.toLocaleString('pt-BR')} total)
           </span>
           <span>Expurgo automático ativo · Porta UDP :{theme.defaultUdpPort} · Clique para expandir</span>
         </div>
+
+        {searchError && (
+          <div role="alert" className="mx-4 mt-3 p-3 rounded-md border border-red-200 bg-red-50 text-xs text-red-800">
+            {searchError}
+          </div>
+        )}
+        {matchedCapped && !loading && (
+          <div className="mx-4 mt-3 p-3 rounded-md border border-amber-300 bg-amber-50 text-xs text-amber-900">
+            Mais de {matched.toLocaleString('pt-BR')} correspondências: o painel mostra as mais recentes. Restrinja o
+            período ou os filtros para ver o restante.
+          </div>
+        )}
 
         {loading ? (
           <div className="p-8 space-y-4">
@@ -674,7 +701,7 @@ export function SyslogView({
               ))}
             </div>
           </div>
-        ) : events.length === 0 ? (
+        ) : events.length === 0 && searchError ? null : events.length === 0 ? (
           <div className="p-10 text-center">
             <p className="text-sm font-medium text-[var(--fw-heading)]">
               Nenhum evento de syslog {theme.label} encontrado

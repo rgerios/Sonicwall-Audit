@@ -154,3 +154,14 @@ PG_EFFECTIVE_CACHE_SIZE=2GB
 
 Se puder, mova o volume do banco (`fwaudit_pgdata`) para um SSD: é o ganho mais direto. Consultas acima de
 5 s ficam registradas no log do PostgreSQL (`docker compose logs db`).
+
+### Busca na tela de Syslogs
+
+- A contagem de correspondências para em **10.000** (a tela mostra `10.000+`): contar milhões de linhas só para
+  exibir um número custa uma leitura enorme em disco mecânico. Restrinja o período ou os filtros para ver o resto.
+- Cada busca tem um **tempo limite** (padrão 20 s, `SYSLOG_SEARCH_TIMEOUT_MS` no `.env`). Se estourar, a tela avisa
+  em vez de travar o banco.
+- Os filtros de IP e de dispositivo usam o índice de texto antes de conferir o campo exato, e filtros comuns
+  percorrem o índice de tempo e param ao juntar a página.
+- O índice `idx_syslogs_vendor_site_ingested` (149 MB por 2 milhões de linhas, sem nenhuma consulta que o use) foi
+  removido, e a tabela de syslogs ganhou um autovacuum mais frequente.

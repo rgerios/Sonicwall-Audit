@@ -38,6 +38,24 @@ export interface SyslogStats {
   hourly: Array<{ startMs: number; total: number; allow: number; blocked: number }>;
 }
 
+/** Teto de linhas contadas numa busca (acima disso a tela mostra "10.000+"). */
+export const SYSLOG_COUNT_CAP = 10_000;
+
+/** Acima disso o filtro e "comum" e a pagina e montada pelo indice de tempo (ver querySyslogs). */
+const SYSLOG_FAST_PAGE_MIN_COUNT = 500;
+const SYSLOG_PROBE_ROWS = 10_000;
+const SYSLOG_PROBE_MIN_MATCHES = 100;
+const SYSLOG_FAST_PAGE_TIMEOUT_MS = 3000;
+
+export class SyslogSearchTimeoutError extends Error {
+  readonly timeoutMs: number;
+  constructor(timeoutMs: number) {
+    super(`A busca excedeu o tempo limite de ${Math.round(timeoutMs / 1000)} s`);
+    this.name = 'SyslogSearchTimeoutError';
+    this.timeoutMs = timeoutMs;
+  }
+}
+
 export interface SyslogQuery {
   search?: string;
   srcIp?: string;
@@ -257,7 +275,21 @@ export class PostgresStore {
       CREATE INDEX IF NOT EXISTS idx_sites_vendor ON sites (vendor, created_at ASC);
       CREATE INDEX IF NOT EXISTS idx_syslogs_site_event ON syslogs (site_id, event_at DESC);
       CREATE INDEX IF NOT EXISTS idx_syslogs_site_ingested ON syslogs (site_id, ingested_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_syslogs_vendor_site_ingested ON syslogs (vendor, site_id, ingested_at DESC);
+      -- Redundante: nenhuma consulta filtra a tabela por vendor sem site_id (medido: 149 MB e custo de
+      -- escrita a cada log). O indice (site_id, ingested_at) ja atende.
+      DROP INDEX IF EXISTS idx_syslogs_vendor_site_ingested;
+
+      -- Tabela de logs: entra e sai muito dado. Vacuum/analyze mais cedo (2% em vez de 20%) mantem o
+      -- mapa de visibilidade e as estatisticas em dia sem varreduras gigantes de uma vez.
+      ALTER TABLE syslogs SET (
+        autovacuum_vacuum_scale_factor = 0.02,
+        autovacuum_vacuum_insert_scale_factor = 0.02,
+        autovacuum_analyze_scale_factor = 0.02
+      );
+      -- Contadores: poucas linhas atualizadas o tempo todo. Folga na pagina permite atualizacao HOT
+      -- (sem reescrever indice).
+      ALTER TABLE syslog_counters SET (fillfactor = 70);
+      ALTER TABLE syslog_hourly SET (fillfactor = 70);
     `);
 
     // Índice trigram acelera a busca textual em milhões de linhas. Requer a extensão
@@ -918,15 +950,19 @@ export class PostgresStore {
   async querySyslogs(
     siteId: string,
     q: SyslogQuery
-  ): Promise<{ matched: number; events: SyslogEvent[] }> {
+  ): Promise<{ matched: number; matchedCapped: boolean; events: SyslogEvent[] }> {
     const pool = this.getPool();
     const where: string[] = ['site_id = $1'];
     const params: unknown[] = [siteId];
+    const like = (raw: string) => `%${raw.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
     if (q.sinceIso) {
       params.push(q.sinceIso);
       where.push(`ingested_at >= $${params.length}`);
     }
+    // Condicoes de base (firewall e periodo) ficam separadas das demais: o caminho rapido da pagina
+    // percorre o indice de tempo e aplica o resto como filtro.
+    const baseCount = where.length;
 
     if (q.action && q.action !== 'all') {
       if (q.action === 'blocked') {
@@ -940,41 +976,110 @@ export class PostgresStore {
       params.push(q.severity);
       where.push(`severity = $${params.length}`);
     }
+    // Os filtros por dispositivo e IP leem o JSON (sem indice). Cada um ganha antes uma condicao
+    // NECESSARIA sobre search_text, que tem indice trigram: o banco estreita os candidatos pelo
+    // indice e so entao confere o campo exato. O resultado e identico, so muito mais barato.
     if (q.device && q.device !== 'all') {
       params.push(q.device);
-      where.push(
-        `(payload_json->>'firewallHost' = $${params.length} OR payload_json->>'serialNumber' = $${params.length})`
-      );
+      const exact = params.length;
+      params.push(like(q.device));
+      where.push(`search_text LIKE $${params.length}`);
+      where.push(`(payload_json->>'firewallHost' = $${exact} OR payload_json->>'serialNumber' = $${exact})`);
     }
     if (q.search) {
-      const escaped = q.search.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
-      params.push(`%${escaped}%`);
+      params.push(like(q.search));
       where.push(`search_text LIKE $${params.length}`);
     }
     if (q.srcIp) {
-      const escaped = q.srcIp.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
-      params.push(`%${escaped}%`);
+      params.push(like(q.srcIp));
+      where.push(`search_text LIKE $${params.length}`);
       where.push(`LOWER(COALESCE(payload_json->>'srcIp', '')) LIKE $${params.length}`);
     }
     if (q.dstIp) {
-      const escaped = q.dstIp.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
-      params.push(`%${escaped}%`);
+      params.push(like(q.dstIp));
+      where.push(`search_text LIKE $${params.length}`);
       where.push(`LOWER(COALESCE(payload_json->>'dstIp', '')) LIKE $${params.length}`);
     }
 
     const whereSql = where.join(' AND ');
-    const countRes = await pool.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count FROM syslogs WHERE ${whereSql}`,
-      params
-    );
-    const rowsRes = await pool.query<{ payload_json: SyslogEvent }>(
-      `SELECT payload_json FROM syslogs WHERE ${whereSql} ORDER BY ingested_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
-      [...params, q.limit, q.offset]
-    );
-    return {
-      matched: Number(countRes.rows[0]?.count || '0'),
-      events: rowsRes.rows.map((r) => r.payload_json),
-    };
+    const timeoutMs = Math.max(1000, Number(process.env.SYSLOG_SEARCH_TIMEOUT_MS) || 20_000);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Teto de tempo so desta consulta: uma busca pesada nao segura o disco de todo o sistema
+      await client.query(`SET LOCAL statement_timeout = ${Math.floor(timeoutMs)}`);
+      // Conta no maximo CAP+1 linhas: contar milhoes de correspondencias so para exibir um numero
+      // custa uma leitura enorme em disco mecanico.
+      const countRes = await client.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM (SELECT 1 FROM syslogs WHERE ${whereSql} LIMIT ${SYSLOG_COUNT_CAP + 1}) c`,
+        params
+      );
+      const counted = Number(countRes.rows[0]?.count || '0');
+      const pageParams = [...params, q.limit, q.offset];
+      const pageTail = `LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+      let rowsRes: { rows: Array<{ payload_json: SyslogEvent }> } | null = null;
+
+      // Muitas correspondencias (filtro comum): percorrer o indice de tempo e parar ao juntar a pagina
+      // e muito mais barato que varrer a tabela inteira e ordenar. O planejador subestima esses
+      // filtros (nao tem estatistica sobre o JSON) e escolhe a varredura; entao, so nesta transacao e
+      // dentro de um savepoint, orientamos o plano para o indice. Se a estimativa estiver errada
+      // (poucas correspondencias no trecho recente), o tempo curto estoura e cai no caminho padrao.
+      // Poucas correspondencias: o indice de texto (trigram) e o caminho certo e o planejador o escolhe.
+      let useFastPage = false;
+      if (where.length > baseCount && counted >= SYSLOG_FAST_PAGE_MIN_COUNT) {
+        // Sondagem barata: quantas das linhas mais recentes passam pelo filtro? Se for uma fracao
+        // grande, a pagina enche logo no inicio do indice de tempo.
+        const probe = await client.query<{ n: string }>(
+          `SELECT COUNT(*)::text AS n FROM (
+             SELECT payload_json, action, severity, search_text FROM syslogs
+             WHERE ${where.slice(0, baseCount).join(' AND ')} ORDER BY ingested_at DESC LIMIT ${SYSLOG_PROBE_ROWS}
+           ) t WHERE ${where.slice(baseCount).join(' AND ')}`,
+          params
+        );
+        useFastPage = Number(probe.rows[0]?.n ?? 0) >= SYSLOG_PROBE_MIN_MATCHES;
+      }
+      if (useFastPage) {
+        await client.query('SAVEPOINT fast_page');
+        try {
+          await client.query(`SET LOCAL statement_timeout = ${SYSLOG_FAST_PAGE_TIMEOUT_MS}`);
+          await client.query('SET LOCAL enable_seqscan = off');
+          await client.query('SET LOCAL enable_bitmapscan = off');
+          await client.query('SET LOCAL enable_sort = off');
+          rowsRes = await client.query<{ payload_json: SyslogEvent }>(
+            `SELECT payload_json FROM syslogs WHERE ${whereSql} ORDER BY ingested_at DESC ${pageTail}`,
+            pageParams
+          );
+          await client.query('RELEASE SAVEPOINT fast_page');
+          await client.query('SET LOCAL enable_seqscan = on');
+          await client.query('SET LOCAL enable_bitmapscan = on');
+          await client.query('SET LOCAL enable_sort = on');
+          await client.query(`SET LOCAL statement_timeout = ${Math.floor(timeoutMs)}`);
+        } catch (err) {
+          if ((err as { code?: string }).code !== '57014') throw err;
+          // Estimativa errada: volta ao caminho padrao (o rollback desfaz os SET LOCAL acima)
+          await client.query('ROLLBACK TO SAVEPOINT fast_page');
+          rowsRes = null;
+        }
+      }
+      if (!rowsRes) {
+        rowsRes = await client.query<{ payload_json: SyslogEvent }>(
+          `SELECT payload_json FROM syslogs WHERE ${whereSql} ORDER BY ingested_at DESC ${pageTail}`,
+          pageParams
+        );
+      }
+      await client.query('COMMIT');
+      return {
+        matched: Math.min(counted, SYSLOG_COUNT_CAP),
+        matchedCapped: counted > SYSLOG_COUNT_CAP,
+        events: rowsRes.rows.map((r) => r.payload_json),
+      };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      if ((err as { code?: string }).code === '57014') throw new SyslogSearchTimeoutError(timeoutMs);
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   async querySyslogsSince(
