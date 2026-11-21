@@ -510,6 +510,7 @@ export type {
   BehaviorCountry,
   BehaviorFlow,
   BehaviorIp,
+  BehaviorOrigin,
   BehaviorIntelStatus,
   BehaviorReport,
   BehaviorThreatCategory,

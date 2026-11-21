@@ -49,17 +49,27 @@ export interface BehaviorIntelStatus {
   sources: BehaviorIntelSource[];
 }
 
+/** País do firewall, descoberto automaticamente (IP público da WAN ou IP traduzido nos logs). */
+export interface BehaviorOrigin {
+  country: string;
+  ip: string | null;
+  source: 'wan' | 'nat' | 'fallback';
+}
+
 export interface BehaviorReport {
   generatedAt: string;
   minutes: number;
-  originCountry: string;
+  origin: BehaviorOrigin;
   analyzedEvents: number;
   publicIps: number;
   totals: { connections: number; blocked: number; countries: number; threatConnections: number; unknownConnections: number };
   countries: BehaviorCountry[];
   ips: BehaviorIp[];
   threats: BehaviorIp[];
+  /** Conexões reais novas desde `since` (ou do último minuto), em ordem de tempo; amostradas se forem muitas. */
   flows: BehaviorFlow[];
+  flowsTotal: number;
+  flowsSampleEvery: number;
   intel: BehaviorIntelStatus;
   dataSource: 'memory' | 'database';
   truncated: boolean;

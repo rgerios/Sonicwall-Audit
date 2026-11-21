@@ -8,7 +8,7 @@ import {
   normalizeSourceFilter,
   type DestinationFilter,
 } from './destinationsEngine.ts';
-import { buildBehaviorReport, readOriginCountry, writeOriginCountry } from './behaviorEngine.ts';
+import { buildBehaviorReport, detectOrigin } from './behaviorEngine.ts';
 import { createIntel } from './intel.ts';
 import { getSharedResolver } from './rdns.ts';
 import crypto from 'node:crypto';
@@ -2091,8 +2091,13 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
           dataSource = 'database';
         }
       }
-      const originCountry = await readOriginCountry(dataDir, site.id);
-      res.json(buildBehaviorReport({ events, minutes, intel, originCountry, dataSource, truncated }));
+      const wanIps = (site.telemetry?.interfaces ?? [])
+        .filter((i) => i.role !== 'internal' || i.zone.toUpperCase() === 'WAN')
+        .map((i) => i.ip);
+      const origin = detectOrigin(events, wanIps, intel);
+      const sinceRaw = typeof req.query.since === 'string' ? req.query.since : '';
+      const since = sinceRaw && Number.isFinite(Date.parse(sinceRaw)) ? new Date(sinceRaw).toISOString() : undefined;
+      res.json(buildBehaviorReport({ events, minutes, intel, origin, since, dataSource, truncated }));
     })
   );
 
@@ -2115,19 +2120,6 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
   router.get('/behavior/intel', (_req, res) => {
     res.json(intel.status());
   });
-
-  router.post(
-    '/behavior/origin',
-    asyncRoute(async (req, res) => {
-      const code = String(req.body?.country ?? '').toUpperCase();
-      if (!/^[A-Z]{2}$/.test(code)) {
-        res.status(400).json({ error: 'Informe o país com 2 letras (ex.: BR).' });
-        return;
-      }
-      await writeOriginCountry(dataDir, siteFor(req).id, code);
-      res.json({ ok: true, country: code });
-    })
-  );
 
   router.get(
     '/sources',

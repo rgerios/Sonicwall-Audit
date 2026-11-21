@@ -1,10 +1,9 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import { ipScope, isIpAddress } from '../shared/destinations.ts';
 import type {
   BehaviorCountry,
   BehaviorFlow,
   BehaviorIp,
+  BehaviorOrigin,
   BehaviorReport,
   BehaviorThreatCategory,
 } from '../shared/behavior.ts';
@@ -12,9 +11,10 @@ import type { Intel, IntelLookup } from './intel.ts';
 import type { SyslogEvent } from './types.ts';
 
 const MAX_IPS_TRACKED = 30_000;
-const FLOW_WINDOW_MS = 5 * 60_000;
-const MAX_FLOWS = 120;
-const DEFAULT_ORIGIN = 'BR';
+// Na primeira carga mostra o último minuto (ajustável, útil para demonstração com logs antigos)
+const DEFAULT_FLOW_WINDOW_MS = Math.max(1000, Number(process.env.BEHAVIOR_FLOW_WINDOW_MS) || 60_000);
+const MAX_FLOWS = 500;
+const FALLBACK_ORIGIN = 'BR';
 
 interface IpAcc {
   ip: string;
@@ -32,7 +32,9 @@ export function buildBehaviorReport(params: {
   events: SyslogEvent[];
   minutes: number;
   intel: Intel;
-  originCountry: string;
+  origin: BehaviorOrigin;
+  /** Só devolve em `flows` as conexões ingeridas depois deste instante (ISO). */
+  since?: string;
   dataSource: 'memory' | 'database';
   truncated: boolean;
 }): BehaviorReport {
@@ -41,7 +43,8 @@ export function buildBehaviorReport(params: {
   const lookups = new Map<string, IntelLookup>();
   const countries = new Map<string, BehaviorCountry & { ipSet: Set<string>; threatSet: Set<string> }>();
   const recent: Array<BehaviorFlow & { ms: number }> = [];
-  const flowCutoff = Date.now() - FLOW_WINDOW_MS;
+  const sinceMs = params.since ? Date.parse(params.since) : NaN;
+  const flowCutoff = Number.isFinite(sinceMs) ? sinceMs : Date.now() - DEFAULT_FLOW_WINDOW_MS;
   let analyzed = 0;
   let blockedTotal = 0;
   let threatConnections = 0;
@@ -106,7 +109,7 @@ export function buildBehaviorReport(params: {
       c.ipSet.add(dst);
       if (threat) c.threatSet.add(dst);
       const ms = seen ? Date.parse(seen) : NaN;
-      if (Number.isFinite(ms) && ms >= flowCutoff && recent.length < 4000) {
+      if (Number.isFinite(ms) && ms > flowCutoff && recent.length < 20_000) {
         recent.push({ at: seen as string, country: lookup.country, blocked, threat, ms });
       }
     }
@@ -134,15 +137,16 @@ export function buildBehaviorReport(params: {
   });
 
   const all = [...ips.values()].sort((a, b) => b.connections - a.connections);
+  recent.sort((a, b) => a.ms - b.ms);
+  const flowsSampleEvery = Math.max(1, Math.ceil(recent.length / MAX_FLOWS));
   const flows: BehaviorFlow[] = recent
-    .sort((a, b) => b.ms - a.ms)
-    .slice(0, MAX_FLOWS)
+    .filter((_, i) => i % flowsSampleEvery === 0)
     .map(({ ms: _ms, ...f }) => f);
 
   return {
     generatedAt: new Date().toISOString(),
     minutes: params.minutes,
-    originCountry: params.originCountry,
+    origin: params.origin,
     analyzedEvents: analyzed,
     publicIps: ips.size,
     totals: {
@@ -156,6 +160,8 @@ export function buildBehaviorReport(params: {
     ips: all.slice(0, 150).map(toIp),
     threats: all.filter((a) => a.lookup.threats.length > 0).slice(0, 100).map(toIp),
     flows,
+    flowsTotal: recent.length,
+    flowsSampleEvery,
     intel: intelStatus(intel),
     dataSource: params.dataSource,
     truncated: params.truncated,
@@ -164,28 +170,29 @@ export function buildBehaviorReport(params: {
 
 const intelStatus = (intel: Intel) => intel.status();
 
-// --- País do firewall (origem das linhas do mapa), por localidade ------------------------------------
+// --- País do firewall, descoberto automaticamente -----------------------------------------------------
 
-const originFile = (dataDir: string) => path.join(dataDir, 'intel', 'origin.json');
-
-export async function readOriginCountry(dataDir: string, siteId: string): Promise<string> {
-  try {
-    const map = JSON.parse(await fs.readFile(originFile(dataDir), 'utf8')) as Record<string, string>;
-    const code = map[siteId];
-    return typeof code === 'string' && /^[A-Z]{2}$/.test(code) ? code : DEFAULT_ORIGIN;
-  } catch {
-    return DEFAULT_ORIGIN;
+/**
+ * Descobre onde o firewall está sem configuração: 1) IP público de uma interface WAN; 2) IP de origem
+ * traduzido (NAT) mais frequente nos logs, que é o IP público que a internet enxerga; 3) Brasil.
+ */
+export function detectOrigin(events: SyslogEvent[], wanIps: string[], intel: Intel): BehaviorOrigin {
+  for (const ip of wanIps) {
+    if (isIpAddress(ip) && ipScope(ip) === 'public') {
+      const country = intel.lookup(ip).country;
+      if (country) return { country, ip, source: 'wan' };
+    }
   }
-}
-
-export async function writeOriginCountry(dataDir: string, siteId: string, code: string): Promise<void> {
-  let map: Record<string, string> = {};
-  try {
-    map = JSON.parse(await fs.readFile(originFile(dataDir), 'utf8')) as Record<string, string>;
-  } catch {
-    /* primeiro uso */
+  const counts = new Map<string, number>();
+  for (const ev of events) {
+    const ip = (ev.natSrcIp || '').trim();
+    if (!ip || !isIpAddress(ip) || ipScope(ip) !== 'public') continue;
+    counts.set(ip, (counts.get(ip) ?? 0) + 1);
   }
-  map[siteId] = code;
-  await fs.mkdir(path.dirname(originFile(dataDir)), { recursive: true });
-  await fs.writeFile(originFile(dataDir), JSON.stringify(map, null, 2));
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  for (const [ip] of sorted.slice(0, 5)) {
+    const country = intel.lookup(ip).country;
+    if (country) return { country, ip, source: 'nat' };
+  }
+  return { country: FALLBACK_ORIGIN, ip: null, source: 'fallback' };
 }

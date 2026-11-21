@@ -3,8 +3,8 @@ import { AlertTriangle, DatabaseZap, Globe2, Loader2, RefreshCw, ShieldAlert } f
 import type { BehaviorIntelStatus, BehaviorIp, BehaviorReport, FirewallVendor } from '../types.ts';
 import { formatBytes } from '../../shared/destinations.ts';
 import { vendorApiUrl } from '../utils/vendorApi.ts';
-import { allCountries, countryName, flagEmoji } from '../utils/worldGeo.ts';
-import { WorldMap, type MapMode } from './WorldMap.tsx';
+import { countryName, flagEmoji } from '../utils/worldGeo.ts';
+import { WorldMap, type FlowBatch, type MapMode } from './WorldMap.tsx';
 
 interface BehaviorViewProps {
   vendor: FirewallVendor;
@@ -27,6 +27,7 @@ const CATEGORY_STYLE: Record<string, string> = {
   tor: 'bg-violet-100 text-violet-800 border-violet-200',
 };
 
+const REALTIME_MS = 5000;
 const fmt = (n: number) => n.toLocaleString('pt-BR');
 const segment = (active: boolean) =>
   `px-3 py-1.5 text-xs font-semibold rounded-md transition-colors ${
@@ -45,13 +46,17 @@ export function BehaviorView({ vendor, refreshToken, onInvestigate }: BehaviorVi
   const [selected, setSelected] = useState<string | null>(null);
   const [showSources, setShowSources] = useState(false);
   const [updateMsg, setUpdateMsg] = useState<string | null>(null);
-  const countryOptions = useMemo(() => allCountries(), []);
   const timer = useRef<number | null>(null);
+  const [batch, setBatch] = useState<FlowBatch | null>(null);
+  const sinceRef = useRef<string | null>(null);
+  const batchId = useRef(0);
+  const [liveStats, setLiveStats] = useState({ conns: 0, blocked: 0, threat: 0 });
 
   const load = useCallback(
     async (signal?: AbortSignal) => {
       try {
-        const res = await fetch(vendorApiUrl(vendor, `/behavior?minutes=${minutes}`), { signal });
+        const since = mode === 'realtime' && sinceRef.current ? `&since=${encodeURIComponent(sinceRef.current)}` : '';
+        const res = await fetch(vendorApiUrl(vendor, `/behavior?minutes=${minutes}${since}`), { signal });
         if (!res.ok) {
           const data = (await res.json().catch(() => ({}))) as { error?: string };
           throw new Error(data.error || `HTTP ${res.status}`);
@@ -59,6 +64,16 @@ export function BehaviorView({ vendor, refreshToken, onInvestigate }: BehaviorVi
         const data = (await res.json()) as BehaviorReport;
         setReport(data);
         setIntel(data.intel);
+        if (mode === 'realtime') {
+          sinceRef.current = data.generatedAt;
+          batchId.current += 1;
+          setBatch({ id: batchId.current, flows: data.flows, sampleEvery: data.flowsSampleEvery });
+          setLiveStats({
+            conns: data.flowsTotal,
+            blocked: data.flows.filter((f) => f.blocked).length * data.flowsSampleEvery,
+            threat: data.flows.filter((f) => f.threat).length * data.flowsSampleEvery,
+          });
+        }
         setError(null);
       } catch (err) {
         if ((err as Error).name === 'AbortError') return;
@@ -67,15 +82,16 @@ export function BehaviorView({ vendor, refreshToken, onInvestigate }: BehaviorVi
         setLoading(false);
       }
     },
-    [vendor, minutes]
+    [vendor, minutes, mode]
   );
 
   useEffect(() => {
     const ctrl = new AbortController();
+    sinceRef.current = null;
     setLoading(true);
     void load(ctrl.signal);
     // Tempo real: atualiza a cada 5 s; estático: a cada 30 s
-    const id = window.setInterval(() => void load(ctrl.signal), mode === 'realtime' ? 5000 : 30000);
+    const id = window.setInterval(() => void load(ctrl.signal), mode === 'realtime' ? REALTIME_MS : 30000);
     return () => {
       ctrl.abort();
       window.clearInterval(id);
@@ -122,24 +138,12 @@ export function BehaviorView({ vendor, refreshToken, onInvestigate }: BehaviorVi
     }
   };
 
-  const changeOrigin = async (code: string) => {
-    try {
-      await fetch(vendorApiUrl(vendor, '/behavior/origin'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ country: code }),
-      });
-      await load();
-    } catch {
-      /* mantém o país atual */
-    }
-  };
-
-  const recentByCountry = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const f of report?.flows ?? []) m.set(f.country, (m.get(f.country) ?? 0) + 1);
-    return m;
-  }, [report]);
+  const topDest = report?.countries.find((c) => c.code !== report.origin.country) ?? null;
+  const topBytes = useMemo(
+    () => [...(report?.countries ?? [])].filter((c) => c.code !== report?.origin.country).sort((a, b) => b.bytes - a.bytes)[0] ?? null,
+    [report]
+  );
+  const abroad = (report?.countries ?? []).filter((c) => c.code !== report?.origin.country).reduce((n, c) => n + c.connections, 0);
 
   const selectedIps = useMemo<BehaviorIp[]>(
     () => (selected ? (report?.ips ?? []).filter((i) => i.country === selected) : []),
@@ -167,21 +171,15 @@ export function BehaviorView({ vendor, refreshToken, onInvestigate }: BehaviorVi
             </button>
           ))}
         </div>
-        <label className="flex items-center gap-2 text-xs text-[var(--fw-text-muted)]">
-          País do firewall
-          <select
-            value={report?.originCountry ?? 'BR'}
-            onChange={(e) => void changeOrigin(e.target.value)}
-            className="px-2 py-1.5 text-xs border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] text-[var(--fw-text-body)] max-w-44"
-            aria-label="País onde o firewall está (origem das linhas)"
-          >
-            {countryOptions.map((c) => (
-              <option key={c.code} value={c.code}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        {report && (
+          <p className="text-xs text-[var(--fw-text-muted)]" title={report.origin.ip ? `Detectado pelo IP público ${report.origin.ip}` : 'Sem IP público detectado: assumido Brasil'}>
+            Firewall em <strong className="text-[var(--fw-heading)]">{flagEmoji(report.origin.country)} {countryName(report.origin.country)}</strong>
+            <span className="text-[var(--fw-text-subtle)]">
+              {' '}
+              ({report.origin.source === 'fallback' ? 'padrão' : `detectado por ${report.origin.ip}`})
+            </span>
+          </p>
+        )}
         <div className="md:ml-auto flex items-center gap-2">
           <button
             type="button"
@@ -215,6 +213,25 @@ export function BehaviorView({ vendor, refreshToken, onInvestigate }: BehaviorVi
         </p>
       )}
 
+      {report && topDest && (
+        <section className="rounded-lg border border-[var(--fw-border)] bg-white p-4" aria-label="Para onde vai o tráfego">
+          <p className="text-sm text-[var(--fw-heading)]">
+            <strong>
+              {abroad > 0 ? Math.round((topDest.connections / Math.max(1, report.totals.connections)) * 100) : 0}% das conexões
+            </strong>{' '}
+            vão para {flagEmoji(topDest.code)} <strong>{countryName(topDest.code)}</strong> ({fmt(topDest.connections)} conexões, {fmt(topDest.ips)} IPs)
+            {topBytes && topBytes.code !== topDest.code ? (
+              <>
+                ; o maior volume de dados vai para {flagEmoji(topBytes.code)} <strong>{countryName(topBytes.code)}</strong> ({formatBytes(topBytes.bytes)})
+              </>
+            ) : (
+              <> e também concentra o maior volume ({formatBytes(topDest.bytes)})</>
+            )}
+            . {report.totals.threatConnections > 0 ? `Atenção: ${fmt(report.totals.threatConnections)} conexões foram para IPs em listas de ameaça.` : 'Nenhuma conexão para IPs em listas de ameaça.'}
+          </p>
+        </section>
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
           { label: 'Conexões externas', value: fmt(t?.connections ?? 0), hint: `${fmt(report?.publicIps ?? 0)} IPs públicos` },
@@ -246,17 +263,25 @@ export function BehaviorView({ vendor, refreshToken, onInvestigate }: BehaviorVi
           ) : (
             <WorldMap
               countries={report?.countries ?? []}
-              originCode={report?.originCountry ?? 'BR'}
+              originCode={report?.origin.country ?? 'BR'}
               mode={mode}
               selected={selected}
               onSelect={setSelected}
-              recentByCountry={recentByCountry}
+              batch={batch}
+              replayMs={REALTIME_MS}
             />
           )}
           <p className="mt-2 text-[11px] text-[var(--fw-text-muted)]">
-            {mode === 'realtime'
-              ? 'As linhas partem do país do firewall (ponto azul) para os países mais acessados; mais partículas e linha mais grossa = mais conexões. Vermelho = há IP em lista de ameaça; âmbar = muitos bloqueios.'
-              : 'Cor do país = volume de conexões (quente = mais). Pontos vermelhos marcam os destinos, posicionados no centro do país (a base é por país, não por cidade).'}{' '}
+            {mode === 'realtime' ? (
+              <>
+                <strong>Cada ponto é uma conexão real</strong> do seu log, saindo do firewall (ponto azul) para o país do IP de destino, na ordem em que ocorreu
+                (exibida com ~5 s de atraso{batch && batch.sampleEvery > 1 ? `; 1 ponto = ${batch.sampleEvery} conexões, por haver muitas` : ''}). Azul = liberada e
+                chega ao destino; âmbar = <strong>bloqueada</strong>, morre no meio do caminho; vermelho = destino em lista de ameaça. A espessura da linha mostra a
+                participação do país no período. Agora: {fmt(liveStats.conns)} novas conexões · {fmt(liveStats.blocked)} bloqueadas · {fmt(liveStats.threat)} para ameaças.{' '}
+              </>
+            ) : (
+              'Cor do país = volume de conexões (quente = mais). Pontos vermelhos marcam os destinos, posicionados no centro do país (a base é por país, não por cidade). '
+            )}
             Clique em um país para ver os IPs.
           </p>
         </section>
