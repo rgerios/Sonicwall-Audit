@@ -403,6 +403,19 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
       return current;
     };
     const R = '/api/sonicos/reporting';
+    {
+      // Descoberta: caminhos-base podem listar os endpoints disponíveis (logado uma vez por janela de 30 min)
+      const dk = `${baseUrl}|discovery`;
+      if (!probeCache.has(dk) || Date.now() - (probeCache.get(dk)?.at ?? 0) > PROBE_DEAD_TTL_MS) {
+        probeCache.set(dk, { ep: null, method: 'GET', at: Date.now() });
+        if (!hasPayload(cpuRes) || !hasPayload(memRes)) {
+          for (const base of [`${R}`, `${R}/system`, `/api/sonicos/system`]) {
+            const d = await safeGet(base);
+            probeNotes.push(`discovery ${base.replace('/api/sonicos', '')}=${d.status} ${JSON.stringify(d.data).slice(0, 300)}`);
+          }
+        }
+      }
+    }
     cpuRes = await probe('cpu', cpuRes, [`${R}/cpu/current`, `${R}/cpu/statistics`, `${R}/cpu-monitor`, `${R}/system/cpu/current`, `${R}/system/cpu/statistics`, `${R}/system/cpu-monitor`]);
     memRes = await probe('mem', memRes, [`${R}/memory/current`, `${R}/memory/statistics`, `${R}/system/memory/current`, `${R}/system/memory/statistics`, `${R}/memory-monitor`]);
     connRes = await probe('conn', connRes, [`${R}/connections/current`, `${R}/connections/statistics`, `${R}/connection-monitor`, `${R}/system/connections/statistics`, `${R}/connections/monitor`]);
@@ -433,7 +446,13 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
       const map = new Map<string, number>();
       for (const raw of extractArray(data, keys)) {
         const stat = flattenStat(raw);
-        const hits = pickNumber(stat, HIT_KEYS);
+        // SonicOS 7.3 (access-rules/ipv4): sem campo "hits"; traz usage, rxpackets e txpackets.
+        let hits = pickNumber(stat, HIT_KEYS);
+        if (hits === null) {
+          const usage = pickNumber(stat, ['usage']);
+          const pk = (pickNumber(stat, ['rxpackets']) ?? 0) + (pickNumber(stat, ['txpackets']) ?? 0);
+          hits = usage !== null ? usage : pk > 0 || 'rxpackets' in stat ? pk : null;
+        }
         if (hits === null || !Number.isFinite(hits)) continue;
         for (const id of [stat.uuid, stat.id]) {
           if (id !== undefined && id !== null && String(id)) map.set(String(id), hits);
