@@ -95,9 +95,7 @@ export function CommandPalette(props: CommandPaletteProps) {
     const list: Command[] = [
       { id: 'go-overview', label: 'Visão Geral', group: 'Ir para', icon: Activity, keywords: 'inicio home dashboard', run: go('overview') },
       { id: 'go-syslogs', label: 'Syslogs', group: 'Ir para', icon: FileTerminal, keywords: 'logs eventos', run: go('syslogs') },
-      ...(vendor === 'sonicwall'
-        ? [{ id: 'go-behavior', label: 'Behavior (mapa e reputação)', group: 'Ir para' as const, icon: Radar, keywords: 'geoip pais mapa botnet blacklist reputacao', run: go('behavior') }]
-        : []),
+      { id: 'go-behavior', label: 'Behavior (mapa e reputação)', group: 'Ir para', icon: Radar, keywords: 'geoip pais mapa botnet blacklist reputacao', run: go('behavior') },
       { id: 'go-destinations', label: 'Destinos (radar)', group: 'Ir para', icon: Radar, keywords: 'bolhas fqdn dominios internet trafego', run: go('destinations') },
       { id: 'go-rules', label: 'Regras Sem Uso', group: 'Ir para', icon: ShieldAlert, keywords: 'firewall politicas sombreadas', run: go('rules') },
       { id: 'go-nats', label: vendor === 'fortigate' ? 'NATs, VIPs e IP Pools Sem Uso' : 'NATs Sem Uso', group: 'Ir para', icon: ArrowLeftRight, keywords: 'nat vip', run: go('nats') },

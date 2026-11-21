@@ -2055,18 +2055,14 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
     })
   );
 
-  // --- Behavior: GeoIP / ASN / reputação 100% offline (somente SonicWall por enquanto) ---------------
+  // --- Behavior: GeoIP / ASN / reputação 100% offline (SonicWall e FortiGate) ---------------
 
   const intel = createIntel(dataDir);
-  if (vendor === 'sonicwall') void intel.start().catch(() => undefined);
+  void intel.start().catch(() => undefined);
 
   router.get(
     '/behavior',
     asyncRoute(async (req, res) => {
-      if (vendor !== 'sonicwall') {
-        res.status(404).json({ error: 'Behavior ainda não está disponível neste ambiente.' });
-        return;
-      }
       const site = siteFor(req);
       const minutes = radarMinutes(req);
       const sinceIso = minutes > 0 ? new Date(Date.now() - minutes * 60 * 1000).toISOString() : undefined;
@@ -2104,10 +2100,6 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
   router.post(
     '/behavior/intel/update',
     asyncRoute(async (_req, res) => {
-      if (vendor !== 'sonicwall') {
-        res.status(404).json({ error: 'Indisponível neste ambiente.' });
-        return;
-      }
       if (intel.status().updating) {
         res.status(409).json({ error: 'Já existe uma atualização em andamento.', intel: intel.status() });
         return;

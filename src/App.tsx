@@ -398,7 +398,7 @@ function AppShell() {
                 />
               )}
 
-              {activeSection === 'behavior' && activeVendor === 'sonicwall' && (
+              {activeSection === 'behavior' && (
                 <BehaviorView
                   vendor={activeVendor}
                   refreshToken={refreshToken}
