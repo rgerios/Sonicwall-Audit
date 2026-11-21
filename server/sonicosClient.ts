@@ -751,6 +751,11 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
     if (ifaceStats.length === 0) {
       missingParts.push(`ifaceStatKeys=${JSON.stringify(Object.keys(asRecord(ifaceStatsRes.data)).slice(0, 6))}`);
     }
+    if (ifaceStats.length > 0) {
+      // Amostra crua de uma interface (só contadores) para calibrar unidades dos campos do SonicOS
+      const sample = ifaceStats.find((i) => /x1|wan/i.test(JSON.stringify(i).slice(0, 200))) ?? ifaceStats[0];
+      missingParts.push(`ifaceSample=${JSON.stringify(sample).slice(0, 700)}`);
+    }
     const diagSummary = `rules=${rulesRes.status}(${rules.length}), nats=${natsRes.status}(${nats.length}), ver=${versionRes.status}, cpu=${cpuRes.status}(${cpuPercent ?? '-'}%), mem=${memRes.status}(${memoryPercent ?? '-'}%), conn=${connRes.status}(${activeConnections ?? '-'}), ifaces=${ifaceCfgRes.status}/${ifaceStatsRes.status}(${interfaces.length}, stats=${ifaceStats.length}), vpn=${vpnRes.status}(${vpns.length})${missingParts.length ? ` | ${missingParts.join(' ')}` : ''}${probeNotes.length ? ` | probe: ${probeNotes.join(' ')}` : ''}`;
     if (rules.length === 0 && interfaces.length === 0) {
       appLog.warn(

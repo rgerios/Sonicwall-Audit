@@ -284,8 +284,14 @@ export function deriveInterfaceThroughput(
 
     const deltaRx = curr.rxBytes >= prev.rxBytes ? curr.rxBytes - prev.rxBytes : 0;
     const deltaTx = curr.txBytes >= prev.txBytes ? curr.txBytes - prev.txBytes : 0;
-    const rxMbps = Number(((deltaRx * 8) / (elapsedSec * 1_000_000)).toFixed(2));
-    const txMbps = Number(((deltaTx * 8) / (elapsedSec * 1_000_000)).toFixed(2));
+    // Taxa acima de ~2x a velocidade do link é impossível: contador reiniciado ou unidade errada.
+    const cap = curr.linkSpeedMbps > 0 ? curr.linkSpeedMbps * 2 : Number.POSITIVE_INFINITY;
+    const toMbps = (delta: number) => {
+      const v = Number(((delta * 8) / (elapsedSec * 1_000_000)).toFixed(2));
+      return v > cap ? 0 : v;
+    };
+    const rxMbps = toMbps(deltaRx);
+    const txMbps = toMbps(deltaTx);
     const utilizationPercent =
       curr.linkSpeedMbps > 0
         ? Number(Math.min(100, ((rxMbps + txMbps) / curr.linkSpeedMbps) * 100).toFixed(1))
