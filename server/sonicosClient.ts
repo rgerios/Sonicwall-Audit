@@ -126,6 +126,8 @@ function parseSpeedMbps(rawSpeed: unknown): number {
 const TRANSIENT_STATUS = new Set([429, 500, 502, 503, 504]);
 const TRANSIENT_RETRIES = 2;
 const TRANSIENT_BACKOFF_MS = 800;
+const probeCache = new Map<string, { ep: string | null; method: 'GET' | 'POST'; at: number }>();
+const PROBE_DEAD_TTL_MS = 30 * 60 * 1000;
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 async function requestSonicOs(
@@ -256,13 +258,15 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
     return reloginInFlight;
   };
 
-  const safeGet = async (endpoint: string) => {
+  const safeGet = async (endpoint: string, method: 'GET' | 'POST' = 'GET') => {
     const empty = { status: 404, data: {}, headers: {} as http.IncomingHttpHeaders };
     let reauthed = false;
     for (let attempt = 0; attempt <= TRANSIENT_RETRIES; attempt += 1) {
       try {
         const res = await requestSonicOs(baseUrl, endpoint, {
+          method,
           headers: authHeaders,
+          body: method === 'POST' ? '{}' : undefined,
           ignoreTlsErrors: params.ignoreTlsErrors,
         });
         if (res.status === 401 && !reauthed) {
@@ -356,6 +360,49 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
         }
       }
     }
+
+    // Endpoints de /reporting variam entre versões do SonicOS (a 7.3 responde 400 aos caminhos antigos).
+    // Quando o principal falha, testa alternativas (GET e POST) e memoriza a que funcionar por appliance.
+    const probeNotes: string[] = [];
+    const hasPayload = (r: { status: number; data: unknown }) =>
+      r.status < 400 && Object.keys(asRecord(r.data)).some((k) => k !== 'status');
+    const errMsg = (r: { data: unknown }) => {
+      const info = asRecord(r.data).status;
+      const first = asRecord(Array.isArray(asRecord(info).info) ? (asRecord(info).info as unknown[])[0] : {});
+      return pickString(first, ['message']).slice(0, 60);
+    };
+    const probe = async (
+      label: string,
+      current: { status: number; data: unknown; headers: http.IncomingHttpHeaders },
+      candidates: string[]
+    ) => {
+      if (hasPayload(current)) return current;
+      const cacheKey = `${baseUrl}|${label}`;
+      const known = probeCache.get(cacheKey);
+      if (known && known.ep === null && Date.now() - known.at < PROBE_DEAD_TTL_MS) return current;
+      const tried: string[] = [];
+      const order: Array<[string, 'GET' | 'POST']> = known?.ep
+        ? [[known.ep, known.method]]
+        : candidates.flatMap((ep) => [[ep, 'GET'] as [string, 'GET' | 'POST'], [ep, 'POST'] as [string, 'GET' | 'POST']]);
+      for (const [ep, method] of order) {
+        const alt = await safeGet(ep, method);
+        if (hasPayload(alt)) {
+          probeCache.set(cacheKey, { ep, method, at: Date.now() });
+          probeNotes.push(`${label}=${method} ${ep}`);
+          return alt;
+        }
+        tried.push(`${method} ${ep.replace('/api/sonicos', '')}=${alt.status}${errMsg(alt) ? `"${errMsg(alt)}"` : ''}`);
+      }
+      probeCache.set(cacheKey, { ep: null, method: 'GET', at: Date.now() });
+      probeNotes.push(`${label}?[${tried.join('; ')}]`);
+      return current;
+    };
+    const R = '/api/sonicos/reporting';
+    cpuRes = await probe('cpu', cpuRes, [`${R}/system/cpu`, `${R}/cpu`, `${R}/system/core-utilization`, `${R}/system/cpu-utilization`, `${R}/system/status`]);
+    memRes = await probe('mem', memRes, [`${R}/system/memory`, `${R}/memory`, `${R}/system/memory-utilization`]);
+    connRes = await probe('conn', connRes, [`${R}/system/connections`, `${R}/connection-cache`, `${R}/connections/statistics`]);
+    ifaceStatsRes = await probe('ifaces', ifaceStatsRes, [`${R}/interfaces/ipv4`, `${R}/interfaces/statistics`, `${R}/interfaces/ipv4/statistics`, `${R}/interface-statistics`]);
+    vpnRes = await probe('vpn', vpnRes, [`${R}/vpn/policies`, `${R}/vpn/ipv4/policies`, `${R}/vpn/ipsec/policies`, `${R}/vpn/sa`]);
 
     const parsed = parseSonicOsJson(
       {
@@ -699,7 +746,7 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
     if (ifaceStats.length === 0) {
       missingParts.push(`ifaceStatKeys=${JSON.stringify(Object.keys(asRecord(ifaceStatsRes.data)).slice(0, 6))}`);
     }
-    const diagSummary = `rules=${rulesRes.status}(${rules.length}), nats=${natsRes.status}(${nats.length}), ver=${versionRes.status}, cpu=${cpuRes.status}(${cpuPercent ?? '-'}%), mem=${memRes.status}(${memoryPercent ?? '-'}%), conn=${connRes.status}(${activeConnections ?? '-'}), ifaces=${ifaceCfgRes.status}/${ifaceStatsRes.status}(${interfaces.length}, stats=${ifaceStats.length}), vpn=${vpnRes.status}(${vpns.length})${missingParts.length ? ` | ${missingParts.join(' ')}` : ''}`;
+    const diagSummary = `rules=${rulesRes.status}(${rules.length}), nats=${natsRes.status}(${nats.length}), ver=${versionRes.status}, cpu=${cpuRes.status}(${cpuPercent ?? '-'}%), mem=${memRes.status}(${memoryPercent ?? '-'}%), conn=${connRes.status}(${activeConnections ?? '-'}), ifaces=${ifaceCfgRes.status}/${ifaceStatsRes.status}(${interfaces.length}, stats=${ifaceStats.length}), vpn=${vpnRes.status}(${vpns.length})${missingParts.length ? ` | ${missingParts.join(' ')}` : ''}${probeNotes.length ? ` | probe: ${probeNotes.join(' ')}` : ''}`;
     if (rules.length === 0 && interfaces.length === 0) {
       appLog.warn(
         'sonicwall',
