@@ -1966,7 +1966,8 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
     generate: (siteId, minutes) => {
       const site = store.sites[siteId];
       if (!site) throw new Error('Localidade não encontrada.');
-      return computeAccessReport(site, minutes, Number(process.env.REPORT_SCHEDULED_TIMEOUT_MS) || 300_000);
+      // segundo plano: sem limite de tempo por padrão (REPORT_SCHEDULED_TIMEOUT_MS > 0 impõe um teto, em ms)
+      return computeAccessReport(site, minutes, Number(process.env.REPORT_SCHEDULED_TIMEOUT_MS) || 0);
     },
     log: (level, message, detail) => appLog[level](vendor, 'scheduled-report', message, detail),
   });
@@ -2011,7 +2012,9 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
         return;
       }
       // Pode levar de segundos a minutos (muitos logs): responde já e a tela acompanha a lista
-      void scheduled.runNow(siteId, 'manual').catch((err) => appLog.warn(vendor, 'scheduled-report', 'Falha ao gerar o relatório', err instanceof Error ? err.message : String(err)));
+      const rawMin = Number((req.body as { minutes?: unknown } | undefined)?.minutes);
+      const minutes = [60, 360, 1440, 4320, 10080, 43200].includes(rawMin) ? rawMin : undefined;
+      void scheduled.runNow(siteId, 'manual', minutes).catch((err) => appLog.warn(vendor, 'scheduled-report', 'Falha ao gerar o relatório', err instanceof Error ? err.message : String(err)));
       res.status(202).json({ ok: true });
     })
   );

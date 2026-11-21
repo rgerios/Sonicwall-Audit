@@ -64,4 +64,10 @@ describe('agregação do relatório de acessos (PostgreSQL)', { skip: !URL }, ()
     assert.equal(r.groups.find((x) => x.dst === '1.1.1.1')?.blocked, true);
     assert.ok(r.hours.length >= 1);
   });
+
+  it('timeout 0 (segundo plano) roda sem limite de tempo e devolve o mesmo resultado', async () => {
+    const r = await store.aggregateAccess(SITE, new Date(Date.now() - 3600_000).toISOString(), undefined, 0);
+    assert.equal(r.timedOut, false);
+    assert.equal(r.totalEvents, 3);
+  });
 });

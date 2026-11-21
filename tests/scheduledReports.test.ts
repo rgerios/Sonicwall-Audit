@@ -58,6 +58,9 @@ describe('relatório agendado', () => {
     assert.equal(st.config.enabled, true);
     assert.ok(st.config.nextRunAt);
     for (let i = 0; i < 3; i += 1) await reports.runNow('site-a', 'manual');
+    const custom = await reports.runNow('site-a', 'manual', 10080);
+    assert.equal(custom.minutes, 10080);
+    assert.ok(custom.filename.endsWith('-7d.html'));
     st = await reports.state('site-a');
     assert.equal(st.files.length, 2);
     const f = await reports.filePath('site-a', st.files[0].id);

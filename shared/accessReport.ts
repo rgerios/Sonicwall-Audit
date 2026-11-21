@@ -120,4 +120,7 @@ export interface ReportScheduleState {
   config: ReportScheduleConfig;
   files: ReportFileInfo[];
   running: boolean;
+  /** Quando a geração em andamento começou e o período (min) que ela cobre. */
+  runningSince?: string | null;
+  runningMinutes?: number | null;
 }

@@ -1151,7 +1151,8 @@ export class PostgresStore {
     timedOut: boolean;
   }> {
     const pool = this.getPool();
-    const timeoutMs = Math.max(5000, timeoutOverrideMs ?? (Number(process.env.REPORT_QUERY_TIMEOUT_MS) || 60_000));
+    // 0 = sem limite de tempo (relatórios gerados em segundo plano); a tela ao vivo usa 60 s por padrão
+    const timeoutMs = timeoutOverrideMs === 0 ? 0 : Math.max(5000, timeoutOverrideMs ?? (Number(process.env.REPORT_QUERY_TIMEOUT_MS) || 60_000));
     const bytes = (key: string) => `COALESCE(NULLIF(payload_json->>'${key}', '')::numeric, 0)`;
     const base = `site_id = $1 AND event_at >= $2 AND action <> 'system'`;
     const client = await pool.connect();

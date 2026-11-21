@@ -38,7 +38,7 @@ export function advanceSlot(slot: number, everyHours: number, now: number): numb
 export interface ScheduledReports {
   state(siteId: string): Promise<ReportScheduleState>;
   save(siteId: string, input: Partial<Pick<ReportScheduleConfig, 'enabled' | 'everyHours' | 'timeOfDay' | 'keep'>>): Promise<ReportScheduleState>;
-  runNow(siteId: string, trigger: 'manual' | 'scheduled'): Promise<ReportFileInfo>;
+  runNow(siteId: string, trigger: 'manual' | 'scheduled', minutes?: number): Promise<ReportFileInfo>;
   isRunning(): boolean;
   filePath(siteId: string, id: string): Promise<{ file: string; filename: string } | null>;
   remove(siteId: string, id: string): Promise<boolean>;
@@ -56,6 +56,7 @@ export function createScheduledReports(deps: {
   const root = path.join(deps.dataDir, 'reports');
   const scheduleFile = path.join(root, 'schedule.json');
   let running = false;
+  let runningInfo: { since: string; minutes: number } | null = null;
   let timer: NodeJS.Timeout | null = null;
   let configs: Record<string, ReportScheduleConfig> | null = null;
 
@@ -90,15 +91,22 @@ export function createScheduledReports(deps: {
   }
 
   async function state(siteId: string): Promise<ReportScheduleState> {
-    return { config: await cfgFor(siteId), files: (await readIndex(siteId)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)), running };
+    return {
+      config: await cfgFor(siteId),
+      files: (await readIndex(siteId)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+      running,
+      runningSince: running ? (runningInfo?.since ?? null) : null,
+      runningMinutes: running ? (runningInfo?.minutes ?? null) : null,
+    };
   }
 
-  async function runNow(siteId: string, trigger: 'manual' | 'scheduled'): Promise<ReportFileInfo> {
+  async function runNow(siteId: string, trigger: 'manual' | 'scheduled', minutesOverride?: number): Promise<ReportFileInfo> {
     if (running) throw new Error('Já existe um relatório sendo gerado.');
     running = true;
     try {
       const cfg = await cfgFor(siteId);
-      const minutes = (trigger === 'scheduled' ? cfg.everyHours : cfg.everyHours) * 60;
+      const minutes = minutesOverride ?? cfg.everyHours * 60;
+      runningInfo = { since: new Date().toISOString(), minutes };
       const report = await deps.generate(siteId, minutes);
       if (report.timedOut) throw new Error('O banco excedeu o tempo limite ao calcular o relatório (muitos logs no período).');
       const site = deps.listSites().find((s) => s.id === siteId);
@@ -107,7 +115,7 @@ export function createScheduledReports(deps: {
       const id = `${stamp}-${crypto.randomBytes(4).toString('hex')}`;
       const dir = dirFor(siteId);
       await fs.mkdir(dir, { recursive: true });
-      const filename = `fwaudit-acessos-${stamp.slice(0, 8)}-${stamp.slice(8)}-${Math.round(cfg.everyHours / 24) || 1}d.html`;
+      const filename = `fwaudit-acessos-${stamp.slice(0, 8)}-${stamp.slice(8)}-${minutes >= 1440 ? `${Math.round(minutes / 1440)}d` : `${Math.round(minutes / 60)}h`}.html`;
       await fs.writeFile(path.join(dir, `${id}.html`), html);
       const info: ReportFileInfo = {
         id,
@@ -131,6 +139,7 @@ export function createScheduledReports(deps: {
       return info;
     } finally {
       running = false;
+      runningInfo = null;
     }
   }
 

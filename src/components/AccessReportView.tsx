@@ -45,6 +45,15 @@ const FREQUENCIES = [
   { hours: 168, label: 'A cada 7 dias' },
 ];
 
+const MANUAL_PERIODS = [
+  { minutes: 60, label: 'Última 1 hora' },
+  { minutes: 360, label: 'Últimas 6 horas' },
+  { minutes: 1440, label: 'Últimas 24 horas' },
+  { minutes: 4320, label: 'Últimos 3 dias' },
+  { minutes: 10080, label: 'Últimos 7 dias' },
+  { minutes: 43200, label: 'Últimos 30 dias' },
+];
+
 const whenBr = (iso: string | null) => (iso ? new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—');
 
 /** Agendamento: o servidor gera o relatório em HTML estático no horário e deixa pronto para baixar. */
@@ -52,6 +61,8 @@ function SchedulePanel({ vendor }: { vendor: FirewallVendor }) {
   const [state, setState] = useState<ReportScheduleState | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [manualMinutes, setManualMinutes] = useState(1440);
+  const [, setTick] = useState(0);
 
   const load = async () => {
     try {
@@ -64,7 +75,10 @@ function SchedulePanel({ vendor }: { vendor: FirewallVendor }) {
   useEffect(() => {
     void load();
     // enquanto gera, acompanha a lista
-    const id = window.setInterval(() => void load(), 4000);
+    const id = window.setInterval(() => {
+      void load();
+      setTick((x) => x + 1); // atualiza o tempo decorrido
+    }, 4000);
     return () => window.clearInterval(id);
   }, [vendor]);
 
@@ -89,10 +103,14 @@ function SchedulePanel({ vendor }: { vendor: FirewallVendor }) {
     setBusy(true);
     setMsg(null);
     try {
-      const res = await fetch(vendorApiUrl(vendor, '/reports/schedule/run'), { method: 'POST' });
+      const res = await fetch(vendorApiUrl(vendor, '/reports/schedule/run'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ minutes: manualMinutes }),
+      });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      setMsg('Gerando o relatório… ele aparece na lista abaixo quando ficar pronto.');
+      setMsg(null);
       void load();
     } catch (err) {
       setMsg(err instanceof Error ? err.message : 'Falha ao iniciar.');
@@ -139,6 +157,16 @@ function SchedulePanel({ vendor }: { vendor: FirewallVendor }) {
           Guardar os últimos
           <input type="number" min={1} max={200} value={cfg?.keep ?? 30} onChange={(e) => e.target.value && void save({ keep: Number(e.target.value) })} className="w-20 px-2 py-1.5 border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] text-[var(--fw-text-body)]" />
         </label>
+        <label className="flex flex-col gap-1 text-[var(--fw-text-muted)]">
+          Período do “Gerar agora”
+          <select value={manualMinutes} onChange={(e) => setManualMinutes(Number(e.target.value))} className="px-2 py-1.5 border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] text-[var(--fw-text-body)]">
+            {MANUAL_PERIODS.map((p) => (
+              <option key={p.minutes} value={p.minutes}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <button type="button" onClick={() => void runNow()} disabled={busy || state?.running} className={btn}>
           {state?.running ? <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" /> : <CalendarClock className="w-3.5 h-3.5" aria-hidden="true" />}
           {state?.running ? 'Gerando…' : 'Gerar agora'}
@@ -148,6 +176,13 @@ function SchedulePanel({ vendor }: { vendor: FirewallVendor }) {
           {cfg?.lastRunAt ? ` · última: ${whenBr(cfg.lastRunAt)}` : ''}
         </p>
       </div>
+      {state?.running && (
+        <p className="text-xs rounded-md border border-sky-200 bg-sky-50 text-sky-900 p-2 inline-flex items-center gap-2" role="status">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+          Gerando em segundo plano o relatório de {MANUAL_PERIODS.find((p) => p.minutes === state.runningMinutes)?.label.toLowerCase() ?? `${state.runningMinutes} min`}
+          {state.runningSince ? ` (há ${Math.max(0, Math.round((Date.now() - Date.parse(state.runningSince)) / 1000))} s)` : ''}. Sem limite de tempo: você pode sair desta tela, e o HTML aparece na lista quando ficar pronto.
+        </p>
+      )}
       {cfg?.lastError && (
         <p className="text-xs text-red-700" role="alert">
           Última tentativa falhou: {cfg.lastError}
