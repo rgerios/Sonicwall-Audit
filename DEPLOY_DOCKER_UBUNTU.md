@@ -72,7 +72,7 @@ docker compose logs -f backend-sonicwall backend-fortigate
 Acesse no navegador:
 
 ```text
-https://IP_DO_SERVIDOR_UBUNTU:8443
+https://IP_DO_SERVIDOR_UBUNTU
 ```
 
 Na primeira abertura, crie seu usuário e senha únicos pela tela inicial (ou defina `FWAUDIT_ADMIN_USER` / `FWAUDIT_ADMIN_PASS` no `.env`).
@@ -84,8 +84,7 @@ Na primeira abertura, crie seu usuário e senha únicos pela tela inicial (ou de
 Libere a porta web e as duas portas UDP dedicadas para receber syslogs dos firewalls SonicWall e FortiGate:
 
 ```bash
-sudo ufw allow 8443/tcp comment "FW Audit Web UI HTTPS"
-sudo ufw allow 8080/tcp comment "FW Audit Web UI (redireciona para HTTPS)"
+sudo ufw allow 443/tcp comment "FW Audit Web UI HTTPS"
 sudo ufw allow 5514/udp comment "FW Audit SonicWall Syslog UDP"
 sudo ufw allow 5515/udp comment "FW Audit FortiGate Syslog UDP"
 sudo ufw reload
@@ -171,7 +170,8 @@ Se puder, mova o volume do banco (`fwaudit_pgdata`) para um SSD: é o ganho mais
 
 ## HTTPS (certificado local)
 
-O painel é servido **somente em HTTPS**. A porta HTTP (`8080`) apenas redireciona para o HTTPS (`8443`).
+O painel é servido **somente em HTTPS, na porta padrão 443**. **Não existe porta HTTP publicada**: nada escuta
+na 80 (a única porta 80 é interna, no loopback do container, só para o health check do Docker).
 
 - **O certificado é gerado sozinho** no primeiro start do container `fwaudit-frontend` e guardado no volume `fwaudit_certs`.
   Ele é assinado por uma **CA local** ("FW Audit Local CA", 10 anos); o certificado do servidor vale 825 dias e é
@@ -180,17 +180,21 @@ O painel é servido **somente em HTTPS**. A porta HTTP (`8080`) apenas redirecio
   separados por vírgula; o `deploy.sh` preenche com o IP do servidor). Se o IP ou o nome mudar, edite o `.env` e rode
   `docker compose up -d`: o certificado do servidor é refeito e a CA continua a mesma.
 - **TLS 1.2 e 1.3**, HTTP/2, e o cookie de sessão sai com o atributo `Secure`.
+- **Porta ocupada?** Se outro serviço já usa a 443 no servidor, o `deploy.sh` avisa antes de subir. Defina outra porta
+  no `.env` (`FRONTEND_HTTPS_PORT=8443`) e acesse `https://IP:8443`.
 
 ### Fazer o navegador confiar (uma única vez)
 
 Sem isso, o navegador mostra "conexão não é particular" (o acesso funciona, é só o aviso). Importe a **CA**, não o
 certificado do servidor: assim as renovações continuam confiáveis.
 
-1. Baixe a CA: `http://IP_DO_SERVIDOR:8080/fwaudit-ca.crt` (também em `https://IP_DO_SERVIDOR:8443/fwaudit-ca.crt`).
-2. Confira a impressão digital (SHA-256) com a mostrada ao final do `deploy.sh` ou com:
+1. Baixe a CA em `https://IP_DO_SERVIDOR/fwaudit-ca.crt` (aceite o aviso apenas para baixar; ou use
+   `curl -k https://IP_DO_SERVIDOR/fwaudit-ca.crt -o fwaudit-ca.crt`).
+2. **Confira a impressão digital** (SHA-256) com a mostrada ao final do `deploy.sh` ou com:
    ```bash
    docker compose exec -T frontend openssl x509 -in /etc/nginx/certs/ca.crt -noout -fingerprint -sha256
    ```
+   Como o download é feito por um canal ainda não confiável, essa conferência é o que garante que o arquivo é o certo.
 3. Instale como **Autoridade de Certificação Raiz Confiável**:
    - **Windows:** duplo clique no arquivo > Instalar certificado > Computador local > "Autoridades de Certificação Raiz Confiáveis".
    - **macOS:** abra no Acesso às Chaves, dê duplo clique no certificado e em "Confiança" escolha "Sempre Confiar".
@@ -212,12 +216,9 @@ docker compose restart frontend
 
 Para voltar ao certificado automático, apague `server.crt`, `server.key` e `.fwaudit-generated` desse volume e reinicie.
 
-### Portas padrão (443 e 80)
-
-No `.env`: `FRONTEND_HTTPS_PORT=443` e `FRONTEND_PORT=80`, depois `docker compose up -d`. Libere as portas no firewall do servidor.
-
 ### Observações
 
 - Não ativei o **HSTS** de propósito: com certificado local ele impediria o navegador de permitir a exceção.
 - Se o painel ficar atrás de outro proxy/balanceador com TLS, ele deve enviar `X-Forwarded-Proto: https` para o cookie sair como `Secure`.
-- `/api/health` e `/healthz` respondem na porta HTTP para monitoramento.
+- Monitoramento: `curl -k https://IP_DO_SERVIDOR/api/health` (responde sem login).
+- Instalações antigas que usavam `http://IP:8080`: essa porta deixa de existir; atualize os favoritos para `https://IP`.

@@ -145,7 +145,7 @@ FWAUDIT_ADMIN_USER=${ADMIN_USER}
 FWAUDIT_ADMIN_PASS=${ADMIN_PASS}
 
 TZ=${TZ_VALUE}
-FRONTEND_PORT=8080
+FRONTEND_HTTPS_PORT=443
 SONICWALL_UDP_PORT=5514
 FORTIGATE_UDP_PORT=5515
 
@@ -178,12 +178,11 @@ ensure_env() {
 }
 SERVER_IPS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | paste -sd, - || true)"
 SERVER_HOSTNAME="$(hostname -f 2>/dev/null || hostname 2>/dev/null || true)"
-ensure_env FRONTEND_HTTPS_PORT 8443
+ensure_env FRONTEND_HTTPS_PORT 443
 ensure_env TLS_IPS "${SERVER_IPS}"
 ensure_env TLS_HOSTNAMES "${SERVER_HOSTNAME}"
 
-FRONTEND_PORT="$(env_value FRONTEND_PORT 8080)"
-FRONTEND_HTTPS_PORT="$(env_value FRONTEND_HTTPS_PORT 8443)"
+FRONTEND_HTTPS_PORT="$(env_value FRONTEND_HTTPS_PORT 443)"
 SONICWALL_UDP_PORT="$(env_value SONICWALL_UDP_PORT 5514)"
 FORTIGATE_UDP_PORT="$(env_value FORTIGATE_UDP_PORT 5515)"
 
@@ -192,13 +191,20 @@ FORTIGATE_UDP_PORT="$(env_value FORTIGATE_UDP_PORT 5515)"
 # ---------------------------------------------------------------------------
 if command -v ufw >/dev/null 2>&1 && $SUDO ufw status 2>/dev/null | grep -q "Status: active"; then
   info "Liberando portas no UFW"
-  $SUDO ufw allow "${FRONTEND_PORT}/tcp" comment "FW Audit Web UI (redireciona para HTTPS)" >/dev/null
   $SUDO ufw allow "${FRONTEND_HTTPS_PORT}/tcp" comment "FW Audit Web UI HTTPS" >/dev/null
   $SUDO ufw allow "${SONICWALL_UDP_PORT}/udp" comment "FW Audit SonicWall Syslog" >/dev/null
   $SUDO ufw allow "${FORTIGATE_UDP_PORT}/udp" comment "FW Audit FortiGate Syslog" >/dev/null
-  echo "Portas liberadas: ${FRONTEND_PORT}/tcp, ${FRONTEND_HTTPS_PORT}/tcp, ${SONICWALL_UDP_PORT}/udp, ${FORTIGATE_UDP_PORT}/udp"
+  echo "Portas liberadas: ${FRONTEND_HTTPS_PORT}/tcp, ${SONICWALL_UDP_PORT}/udp, ${FORTIGATE_UDP_PORT}/udp"
 else
   info "UFW inativo ou ausente: nenhuma regra de firewall alterada"
+fi
+
+# Porta HTTPS livre? (se o nosso frontend já está no ar, é ele quem a usa: tudo bem)
+if [ -z "$($DOCKER compose ps -q frontend 2>/dev/null || true)" ] && command -v ss >/dev/null 2>&1; then
+  if ss -ltnH "sport = :${FRONTEND_HTTPS_PORT}" 2>/dev/null | grep -q .; then
+    warn "A porta ${FRONTEND_HTTPS_PORT}/tcp já está em uso neste servidor (outro serviço web?)."
+    fail "Libere a porta ou defina outra em FRONTEND_HTTPS_PORT no .env (ex.: 8443) e execute ./deploy.sh de novo."
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -243,10 +249,11 @@ SERVER_IP="${SERVER_IP:-IP_DO_SERVIDOR}"
 
 info "FW Audit no ar"
 CA_FINGERPRINT="$($DOCKER compose exec -T frontend openssl x509 -in /etc/nginx/certs/ca.crt -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 || true)"
-echo "  Painel (HTTPS):    https://${SERVER_IP}:${FRONTEND_HTTPS_PORT}"
-echo "  (http://${SERVER_IP}:${FRONTEND_PORT} apenas redireciona para o HTTPS)"
+if [ "$FRONTEND_HTTPS_PORT" = "443" ]; then PANEL_URL="https://${SERVER_IP}"; else PANEL_URL="https://${SERVER_IP}:${FRONTEND_HTTPS_PORT}"; fi
+echo "  Painel (HTTPS):    ${PANEL_URL}   (não há porta HTTP)"
 echo "  Certificado:       gerado localmente. Para o navegador deixar de avisar, importe a CA UMA vez:"
-echo "                     baixe http://${SERVER_IP}:${FRONTEND_PORT}/fwaudit-ca.crt e instale como 'Autoridade de Certificação Raiz Confiável'"
+echo "                     baixe ${PANEL_URL}/fwaudit-ca.crt (aceite o aviso só para baixar) e instale como"
+echo "                     'Autoridade de Certificação Raiz Confiável'"
 [ -n "$CA_FINGERPRINT" ] && echo "                     Impressão digital (SHA-256) da CA: ${CA_FINGERPRINT}"
 echo "  Syslog SonicWall:  ${SERVER_IP} porta UDP ${SONICWALL_UDP_PORT}"
 echo "  Syslog FortiGate:  ${SERVER_IP} porta UDP ${FORTIGATE_UDP_PORT}"
