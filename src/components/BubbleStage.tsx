@@ -271,7 +271,13 @@ export function BubbleStage(props: BubbleStageProps) {
                     onPointerLeave={() => onHover(null)}
                     onFocus={() => onHover(n.id)}
                     onBlur={() => onHover(null)}
-                    onClick={() => onSelect(selectedId === n.id ? null : n.id)}
+                    // Seleciona no pointerdown: a física empurra a bolha para longe do cursor, então o
+                    // pointerup raramente cai no mesmo elemento e o "click" nunca disparava.
+                    onPointerDown={(e) => {
+                      if (e.button !== 0) return;
+                      e.stopPropagation();
+                      onSelect(selectedId === n.id ? null : n.id);
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
