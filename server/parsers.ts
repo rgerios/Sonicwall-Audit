@@ -537,6 +537,12 @@ export interface ClassifyContext {
   observedSince?: string | null;
   /** Uptime do appliance: o contador de hits do firewall zera a cada reboot. */
   uptimeSeconds?: number;
+  /**
+   * Quando verdadeiro e o appliance entrega contadores (algum > 0), eles são a fonte de verdade para
+   * "sem uso". A correlação por syslog é heurística (zona/IP/porta): regras Any→Any e desabilitadas
+   * "acertam" milhões de eventos e jamais seriam classificadas como sem uso.
+   */
+  preferApplianceHits?: boolean;
 }
 
 function describeObservation(ctx?: ClassifyContext): string {
@@ -573,6 +579,8 @@ export function classifyPolicies(
 ): { rules: FirewallRule[]; nats: NatPolicy[] } {
   const sortedRules = [...inputRules].sort((a, b) => a.priority - b.priority);
   const observation = describeObservation(ctx);
+  const rulesCounterTrusted = !!ctx?.preferApplianceHits && inputRules.some((r) => r.applianceHits > 0);
+  const natsCounterTrusted = !!ctx?.preferApplianceHits && inputNats.some((n) => n.applianceHits > 0);
 
   const rules: FirewallRule[] = sortedRules.map((rule, idx) => {
     // Sombreada por uma regra anterior mais ampla no mesmo par de zonas
@@ -594,7 +602,7 @@ export function classifyPolicies(
       }
     }
 
-    const totalHits = rule.applianceHits + rule.syslogHits;
+    const totalHits = rulesCounterTrusted ? rule.applianceHits : rule.applianceHits + rule.syslogHits;
     const isOverPermissive =
       rule.enabled &&
       rule.action === 'allow' &&
@@ -616,7 +624,9 @@ export function classifyPolicies(
         : `Sombreada pela regra anterior ${shadowedBy} antes de ser avaliada pelo firewall.`;
     } else if (totalHits === 0) {
       status = 'unused';
-      findingReason = `Zero acertos no contador do appliance e zero correspondências nos syslogs analisados.${observation}`;
+      findingReason = rulesCounterTrusted
+        ? `Zero acertos no contador do appliance (fonte de verdade).${observation}`
+        : `Zero acertos no contador do appliance e zero correspondências nos syslogs analisados.${observation}`;
     } else if (isOverPermissive) {
       status = 'overpermissive';
       findingReason = 'Regra permissiva demais (Any → Any · Any) envolvendo zona sensível.';
@@ -627,7 +637,7 @@ export function classifyPolicies(
 
   const sortedNats = [...inputNats].sort((a, b) => a.priority - b.priority);
   const nats: NatPolicy[] = sortedNats.map((nat) => {
-    const totalHits = nat.applianceHits + nat.syslogHits;
+    const totalHits = natsCounterTrusted ? nat.applianceHits : nat.applianceHits + nat.syslogHits;
     const isOrphaned =
       nat.enabled &&
       nat.transDestination !== 'Original' &&

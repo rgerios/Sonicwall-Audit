@@ -345,6 +345,7 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
     const classified = classifyPolicies(site.rules, site.nats, {
       observedSince: site.hitsObservedSince,
       uptimeSeconds: site.appliance.uptimeSeconds,
+      preferApplianceHits: vendor === 'sonicwall',
     });
     site.rules = classified.rules;
     site.nats = classified.nats;
