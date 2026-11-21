@@ -1,7 +1,7 @@
 services:
   db:
     image: postgres:16-alpine
-    container_name: fwaudit-db
+    container_name: ${CONTAINER_PREFIX:-fwaudit}-db
     restart: unless-stopped
     # Ajuste para disco mecânico (HDD) e tabela de logs grande. Valores sobrescrevíveis no .env.
     # synchronous_commit=off: o COMMIT não espera o fsync; em queda de energia perde-se no máximo
@@ -51,7 +51,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    container_name: fwaudit-backend-sonicwall
+    container_name: ${CONTAINER_PREFIX:-fwaudit}-backend-sonicwall
     restart: unless-stopped
     stop_grace_period: 30s
     depends_on:
@@ -80,7 +80,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    container_name: fwaudit-backend-fortigate
+    container_name: ${CONTAINER_PREFIX:-fwaudit}-backend-fortigate
     restart: unless-stopped
     stop_grace_period: 30s
     depends_on:
@@ -109,7 +109,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    container_name: fwaudit-frontend
+    container_name: ${CONTAINER_PREFIX:-fwaudit}-frontend
     restart: unless-stopped
     depends_on:
       backend-sonicwall:

@@ -4,6 +4,11 @@
 # Uso, dentro da pasta do projeto:
 #   ./deploy.sh            instala o que faltar, cria o .env e sobe os containers
 #   ./deploy.sh --update   faz git pull antes de reconstruir e subir
+#   ./deploy.sh hml        instala o ambiente de HOMOLOGAÇÃO (branch hml, portas 8443/5614/5615)
+#   ./deploy.sh hml --update
+#
+# PRD = branch main, pasta padrão. HML = outro clone (ex.: ~/Sonicwall-Audit-hml) na branch hml,
+# com containers, volumes e portas próprios: os dois ambientes podem rodar no mesmo servidor.
 #
 # Pode ser executado quantas vezes for preciso: não recria o .env nem apaga dados.
 
@@ -12,11 +17,14 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 UPDATE=false
+ENVIRONMENT=prd
 for arg in "$@"; do
   case "$arg" in
     --update) UPDATE=true ;;
+    hml|--hml) ENVIRONMENT=hml ;;
+    prd|--prd) ENVIRONMENT=prd ;;
     -h|--help)
-      sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -25,6 +33,14 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+if [ "$ENVIRONMENT" = "hml" ]; then
+  EXPECTED_BRANCH=hml; DEF_HTTPS=8443; DEF_SW_UDP=5614; DEF_FG_UDP=5615
+  CONTAINER_PREFIX=fwaudit-hml; ENV_LABEL="HML (homologação)"
+else
+  EXPECTED_BRANCH=main; DEF_HTTPS=443; DEF_SW_UDP=5514; DEF_FG_UDP=5515
+  CONTAINER_PREFIX=fwaudit; ENV_LABEL="PRD (produção)"
+fi
 
 info()  { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33m[aviso]\033[0m %s\n' "$*"; }
@@ -80,6 +96,12 @@ $DOCKER compose version >/dev/null 2>&1 || fail "Plugin 'docker compose' ausente
 # ---------------------------------------------------------------------------
 # 2. Código
 # ---------------------------------------------------------------------------
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" != "$EXPECTED_BRANCH" ]; then
+  warn "Ambiente ${ENV_LABEL} espera a branch '${EXPECTED_BRANCH}', mas esta pasta está em '${CURRENT_BRANCH}'."
+  fail "Faça 'git checkout ${EXPECTED_BRANCH}' (ou use a pasta correta do ambiente) e execute de novo."
+fi
+
 if $UPDATE; then
   info "Atualizando o código (git pull)"
   git pull --ff-only
@@ -145,9 +167,14 @@ FWAUDIT_ADMIN_USER=${ADMIN_USER}
 FWAUDIT_ADMIN_PASS=${ADMIN_PASS}
 
 TZ=${TZ_VALUE}
-FRONTEND_HTTPS_PORT=443
-SONICWALL_UDP_PORT=5514
-FORTIGATE_UDP_PORT=5515
+FRONTEND_HTTPS_PORT=${DEF_HTTPS}
+SONICWALL_UDP_PORT=${DEF_SW_UDP}
+FORTIGATE_UDP_PORT=${DEF_FG_UDP}
+
+# Ambiente: isola containers, volumes e rede (HML e PRD podem coexistir no mesmo servidor).
+FWAUDIT_ENV=${ENVIRONMENT}
+CONTAINER_PREFIX=${CONTAINER_PREFIX}
+$( [ "$ENVIRONMENT" = "hml" ] && echo "COMPOSE_PROJECT_NAME=fwaudit-hml" )
 
 # Chave opcional do Gemini para a aba "Análise com IA" (também configurável pela interface).
 GEMINI_API_KEY=
@@ -178,22 +205,22 @@ ensure_env() {
 }
 SERVER_IPS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | paste -sd, - || true)"
 SERVER_HOSTNAME="$(hostname -f 2>/dev/null || hostname 2>/dev/null || true)"
-ensure_env FRONTEND_HTTPS_PORT 443
+ensure_env FRONTEND_HTTPS_PORT "${DEF_HTTPS}"
 ensure_env TLS_IPS "${SERVER_IPS}"
 ensure_env TLS_HOSTNAMES "${SERVER_HOSTNAME}"
 
-FRONTEND_HTTPS_PORT="$(env_value FRONTEND_HTTPS_PORT 443)"
-SONICWALL_UDP_PORT="$(env_value SONICWALL_UDP_PORT 5514)"
-FORTIGATE_UDP_PORT="$(env_value FORTIGATE_UDP_PORT 5515)"
+FRONTEND_HTTPS_PORT="$(env_value FRONTEND_HTTPS_PORT "${DEF_HTTPS}")"
+SONICWALL_UDP_PORT="$(env_value SONICWALL_UDP_PORT "${DEF_SW_UDP}")"
+FORTIGATE_UDP_PORT="$(env_value FORTIGATE_UDP_PORT "${DEF_FG_UDP}")"
 
 # ---------------------------------------------------------------------------
 # 4. Firewall do Ubuntu (somente se o UFW estiver ativo)
 # ---------------------------------------------------------------------------
 if command -v ufw >/dev/null 2>&1 && $SUDO ufw status 2>/dev/null | grep -q "Status: active"; then
   info "Liberando portas no UFW"
-  $SUDO ufw allow "${FRONTEND_HTTPS_PORT}/tcp" comment "FW Audit Web UI HTTPS" >/dev/null
-  $SUDO ufw allow "${SONICWALL_UDP_PORT}/udp" comment "FW Audit SonicWall Syslog" >/dev/null
-  $SUDO ufw allow "${FORTIGATE_UDP_PORT}/udp" comment "FW Audit FortiGate Syslog" >/dev/null
+  $SUDO ufw allow "${FRONTEND_HTTPS_PORT}/tcp" comment "FW Audit ${ENVIRONMENT} Web UI HTTPS" >/dev/null
+  $SUDO ufw allow "${SONICWALL_UDP_PORT}/udp" comment "FW Audit ${ENVIRONMENT} SonicWall Syslog" >/dev/null
+  $SUDO ufw allow "${FORTIGATE_UDP_PORT}/udp" comment "FW Audit ${ENVIRONMENT} FortiGate Syslog" >/dev/null
   echo "Portas liberadas: ${FRONTEND_HTTPS_PORT}/tcp, ${SONICWALL_UDP_PORT}/udp, ${FORTIGATE_UDP_PORT}/udp"
 else
   info "UFW inativo ou ausente: nenhuma regra de firewall alterada"
@@ -247,7 +274,7 @@ fi
 SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
 SERVER_IP="${SERVER_IP:-IP_DO_SERVIDOR}"
 
-info "FW Audit no ar"
+info "FW Audit no ar — ambiente ${ENV_LABEL}"
 CA_FINGERPRINT="$($DOCKER compose exec -T frontend openssl x509 -in /etc/nginx/certs/ca.crt -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 || true)"
 if [ "$FRONTEND_HTTPS_PORT" = "443" ]; then PANEL_URL="https://${SERVER_IP}"; else PANEL_URL="https://${SERVER_IP}:${FRONTEND_HTTPS_PORT}"; fi
 echo "  Painel (HTTPS):    ${PANEL_URL}   (não há porta HTTP)"
@@ -267,8 +294,8 @@ if $CREATED_ENV; then
   fi
 fi
 echo
-echo "  Atualizar depois:  ./deploy.sh --update"
+echo "  Atualizar depois:  ./deploy.sh $( [ "$ENVIRONMENT" = "hml" ] && echo "hml " )--update"
 echo "  Ver logs:          ${DOCKER} compose logs -f"
-echo "  Backup do banco:   ${DOCKER} exec -t fwaudit-db pg_dump -U fwaudit fwaudit > backup-\$(date +%F).sql"
+echo "  Backup do banco:   ${DOCKER} exec -t ${CONTAINER_PREFIX}-db pg_dump -U fwaudit fwaudit > backup-\$(date +%F).sql"
 echo
 warn "O painel usa HTTPS com certificado local (CA própria): importe a CA nos navegadores dos administradores e mantenha o acesso restrito à rede interna ou VPN."
