@@ -365,7 +365,12 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
     // Quando o principal falha, testa alternativas (GET e POST) e memoriza a que funcionar por appliance.
     const probeNotes: string[] = [];
     const hasPayload = (r: { status: number; data: unknown }) =>
-      r.status < 400 && Object.keys(asRecord(r.data)).some((k) => k !== 'status');
+      r.status < 400 &&
+      (Array.isArray(r.data)
+        ? r.data.length > 0
+        : Object.keys(asRecord(r.data)).some((k) => k !== 'status'));
+    const shape = (r: { data: unknown }) =>
+      Array.isArray(r.data) ? `array[${r.data.length}]` : `keys=${JSON.stringify(Object.keys(asRecord(r.data)).slice(0, 6))}`;
     const errMsg = (r: { data: unknown }) => {
       const info = asRecord(r.data).status;
       const first = asRecord(Array.isArray(asRecord(info).info) ? (asRecord(info).info as unknown[])[0] : {});
@@ -383,7 +388,7 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
       const tried: string[] = [];
       const order: Array<[string, 'GET' | 'POST']> = known?.ep
         ? [[known.ep, known.method]]
-        : candidates.flatMap((ep) => [[ep, 'GET'] as [string, 'GET' | 'POST'], [ep, 'POST'] as [string, 'GET' | 'POST']]);
+        : candidates.map((ep) => [ep, 'GET'] as [string, 'GET' | 'POST']);
       for (const [ep, method] of order) {
         const alt = await safeGet(ep, method);
         if (hasPayload(alt)) {
@@ -391,18 +396,18 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
           probeNotes.push(`${label}=${method} ${ep}`);
           return alt;
         }
-        tried.push(`${method} ${ep.replace('/api/sonicos', '')}=${alt.status}${errMsg(alt) ? `"${errMsg(alt)}"` : ''}`);
+        tried.push(`${method} ${ep.replace('/api/sonicos', '')}=${alt.status}${alt.status < 400 ? ` ${shape(alt)}` : errMsg(alt) ? `"${errMsg(alt)}"` : ''}`);
       }
       probeCache.set(cacheKey, { ep: null, method: 'GET', at: Date.now() });
       probeNotes.push(`${label}?[${tried.join('; ')}]`);
       return current;
     };
     const R = '/api/sonicos/reporting';
-    cpuRes = await probe('cpu', cpuRes, [`${R}/system/cpu`, `${R}/cpu`, `${R}/system/core-utilization`, `${R}/system/cpu-utilization`, `${R}/system/status`]);
-    memRes = await probe('mem', memRes, [`${R}/system/memory`, `${R}/memory`, `${R}/system/memory-utilization`]);
-    connRes = await probe('conn', connRes, [`${R}/system/connections`, `${R}/connection-cache`, `${R}/connections/statistics`]);
-    ifaceStatsRes = await probe('ifaces', ifaceStatsRes, [`${R}/interfaces/ipv4`, `${R}/interfaces/statistics`, `${R}/interfaces/ipv4/statistics`, `${R}/interface-statistics`]);
-    vpnRes = await probe('vpn', vpnRes, [`${R}/vpn/policies`, `${R}/vpn/ipv4/policies`, `${R}/vpn/ipsec/policies`, `${R}/vpn/sa`]);
+    cpuRes = await probe('cpu', cpuRes, [`${R}/cpu/current`, `${R}/cpu/statistics`, `${R}/cpu-monitor`, `${R}/system/cpu/current`, `${R}/system/cpu/statistics`, `${R}/system/cpu-monitor`]);
+    memRes = await probe('mem', memRes, [`${R}/memory/current`, `${R}/memory/statistics`, `${R}/system/memory/current`, `${R}/system/memory/statistics`, `${R}/memory-monitor`]);
+    connRes = await probe('conn', connRes, [`${R}/connections/current`, `${R}/connections/statistics`, `${R}/connection-monitor`, `${R}/system/connections/statistics`, `${R}/connections/monitor`]);
+    ifaceStatsRes = await probe('ifaces', ifaceStatsRes, [`${R}/interfaces/ipv4/statistics`, `${R}/interfaces/ipv6/statistics`]);
+    vpnRes = await probe('vpn', vpnRes, [`${R}/vpn/policies/statistics`, `${R}/vpn/ipv4/statistics`, `${R}/vpn/ipsec/statistics`, `${R}/vpn/sa/statistics`, `${R}/vpn/tunnels`]);
 
     const parsed = parseSonicOsJson(
       {
