@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { AccessReportView } from './AccessReportView.tsx';
 import {
   AlertTriangle,
   Ban,
@@ -29,7 +30,7 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-export function ReportsView({
+function AuditReportView({
   vendor,
   refreshToken,
   onGoToConnect,
@@ -514,6 +515,39 @@ export function ReportsView({
           </pre>
         </section>
       </div>
+    </div>
+  );
+}
+
+/** SonicWall: relatório de Auditoria + relatório de Acessos e Consumo (FortiGate continua só com Auditoria). */
+export function ReportsView(props: ReportsViewProps) {
+  const [tab, setTab] = useState<'audit' | 'access'>('audit');
+  if (props.vendor !== 'sonicwall') return <AuditReportView {...props} />;
+  return (
+    <div className="space-y-4">
+      <div className="no-print inline-flex p-1 bg-[var(--fw-surface-alt)] rounded-lg" role="tablist" aria-label="Tipo de relatório">
+        {(
+          [
+            { id: 'audit', label: 'Auditoria', hint: 'regras, NAT e segurança' },
+            { id: 'access', label: 'Acessos e Consumo', hint: 'IPs, categorias, países e banda' },
+          ] as const
+        ).map((x) => (
+          <button
+            key={x.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === x.id}
+            onClick={() => setTab(x.id)}
+            className={`px-4 py-2 text-sm font-semibold rounded-md transition-colors ${
+              tab === x.id ? 'bg-white text-[var(--fw-heading)] shadow-xs' : 'text-[var(--fw-text-muted)] hover:text-[var(--fw-heading)]'
+            }`}
+          >
+            {x.label}
+            <span className="ml-2 text-[11px] font-normal text-[var(--fw-text-subtle)] hidden sm:inline">{x.hint}</span>
+          </button>
+        ))}
+      </div>
+      {tab === 'audit' ? <AuditReportView {...props} /> : <AccessReportView vendor={props.vendor} refreshToken={props.refreshToken} />}
     </div>
   );
 }

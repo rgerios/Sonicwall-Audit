@@ -1136,6 +1136,85 @@ export class PostgresStore {
   }
 
   /**
+   * Agregação para o relatório de acessos: agrupa no banco (sem trazer milhões de linhas ao Node).
+   * Respeita o teto de tempo das buscas; se estourar, devolve o que foi possível e timedOut = true.
+   */
+  async aggregateAccess(
+    siteId: string,
+    sinceIso: string,
+    groupLimit = 60_000
+  ): Promise<{
+    groups: Array<{ src: string; dst: string; proto: string; port: string; app: string; blocked: boolean; c: number; up: number; down: number }>;
+    hours: Array<{ t: string; c: number; blocked: number; up: number; down: number }>;
+    totalEvents: number;
+    timedOut: boolean;
+  }> {
+    const pool = this.getPool();
+    const timeoutMs = Math.max(5000, Number(process.env.REPORT_QUERY_TIMEOUT_MS) || 60_000);
+    const bytes = (key: string) => `COALESCE(NULLIF(payload_json->>'${key}', '')::numeric, 0)`;
+    const base = `site_id = $1 AND event_at >= $2 AND action <> 'system'`;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN READ ONLY');
+      await client.query(`SET LOCAL statement_timeout = ${Math.floor(timeoutMs)}`);
+      const groups = await client.query(
+        `SELECT payload_json->>'srcIp' AS src, payload_json->>'dstIp' AS dst,
+                COALESCE(payload_json->>'protocol', '') AS proto, COALESCE(payload_json->>'dstPort', '') AS port,
+                COALESCE(payload_json->>'appName', '') AS app,
+                (action IN ('drop','deny','reset')) AS blocked,
+                count(*)::bigint AS c, sum(${bytes('bytesSent')})::bigint AS up, sum(${bytes('bytesRcvd')})::bigint AS down
+           FROM syslogs WHERE ${base}
+            AND COALESCE(payload_json->>'srcIp', '') NOT IN ('', '-') AND COALESCE(payload_json->>'dstIp', '') NOT IN ('', '-')
+          GROUP BY 1,2,3,4,5,6 ORDER BY c DESC LIMIT $3`,
+        [siteId, sinceIso, groupLimit]
+      );
+      const hours = await client.query(
+        `SELECT date_trunc('hour', event_at) AS t, count(*)::bigint AS c,
+                count(*) FILTER (WHERE action IN ('drop','deny','reset'))::bigint AS blocked,
+                sum(${bytes('bytesSent')})::bigint AS up, sum(${bytes('bytesRcvd')})::bigint AS down
+           FROM syslogs WHERE ${base} GROUP BY 1 ORDER BY 1`,
+        [siteId, sinceIso]
+      );
+      const total = await client.query(
+        `SELECT count(*)::bigint AS n FROM syslogs WHERE ${base}
+            AND COALESCE(payload_json->>'srcIp', '') NOT IN ('', '-') AND COALESCE(payload_json->>'dstIp', '') NOT IN ('', '-')`,
+        [siteId, sinceIso]
+      );
+      await client.query('COMMIT');
+      return {
+        groups: groups.rows.map((r) => ({
+          src: String(r.src),
+          dst: String(r.dst),
+          proto: String(r.proto),
+          port: String(r.port),
+          app: String(r.app),
+          blocked: Boolean(r.blocked),
+          c: Number(r.c),
+          up: Number(r.up ?? 0),
+          down: Number(r.down ?? 0),
+        })),
+        hours: hours.rows.map((r) => ({
+          t: new Date(r.t).toISOString(),
+          c: Number(r.c),
+          blocked: Number(r.blocked),
+          up: Number(r.up ?? 0),
+          down: Number(r.down ?? 0),
+        })),
+        totalEvents: Number(total.rows[0]?.n ?? 0),
+        timedOut: false,
+      };
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      if ((err as { code?: string }).code === '57014') {
+        return { groups: [], hours: [], totalEvents: 0, timedOut: true };
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
    * Estatísticas lidas dos contadores (sem varrer a tabela). Devolve null enquanto os contadores
    * deste firewall ainda não foram calculados; o motor então usa a janela em memória e dispara
    * backfillSyslogStats em segundo plano.

@@ -515,3 +515,13 @@ export type {
   BehaviorReport,
   BehaviorThreatCategory,
 } from './behavior.ts';
+
+export type {
+  AccessCategoryRow,
+  AccessCountryRow,
+  AccessDestinationRow,
+  AccessReportData,
+  AccessServiceRow,
+  AccessSourceRow,
+  AccessTimelinePoint,
+} from './accessReport.ts';

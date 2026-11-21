@@ -10,6 +10,7 @@ import {
 } from './destinationsEngine.ts';
 import { buildBehaviorReport, detectOrigin } from './behaviorEngine.ts';
 import { createIntel } from './intel.ts';
+import { aggregateEventsInMemory, buildAccessReport } from './accessReport.ts';
 import { getSharedResolver } from './rdns.ts';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -1920,6 +1921,38 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
     const overview = buildOverview(site);
     res.json(buildAuditReport(overview, site.syslogs, site.rules, site.nats));
   });
+
+  // Relatório de Acessos e Consumo (IPs, categorias, países e banda), agregado no banco
+  router.get(
+    '/access-report',
+    asyncRoute(async (req, res) => {
+      const site = siteFor(req);
+      const raw = Number(req.query.minutes ?? 1440);
+      const minutes = Number.isFinite(raw) && raw > 0 ? Math.min(43200, Math.floor(raw)) : 1440;
+      const sinceIso = new Date(Date.now() - minutes * 60 * 1000).toISOString();
+      let agg;
+      let dataSource: 'memory' | 'database' = 'memory';
+      if (usePg) {
+        await flushPendingInserts();
+        agg = await pgStore.aggregateAccess(site.id, sinceIso);
+        dataSource = 'database';
+      } else {
+        agg = aggregateEventsInMemory(site.syslogs.filter((ev) => !ev.ingestedAt || ev.ingestedAt >= sinceIso));
+      }
+      const resolver = getSharedResolver();
+      const report = buildAccessReport({
+        agg,
+        vendor,
+        minutes,
+        sinceIso,
+        dataSource,
+        intel,
+        lookupHost: (ip) => resolver.lookupCached(ip),
+      });
+      resolver.schedule(report.destinations.filter((d) => d.host === null && d.country !== null).slice(0, 40).map((d) => d.ip));
+      res.json(report);
+    })
+  );
 
   router.get('/report/download', (req, res) => {
     const site = siteFor(req);
