@@ -408,6 +408,8 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
     connRes = await probe('conn', connRes, [`${R}/connections/current`, `${R}/connections/statistics`, `${R}/connection-monitor`, `${R}/system/connections/statistics`, `${R}/connections/monitor`]);
     ifaceStatsRes = await probe('ifaces', ifaceStatsRes, [`${R}/interfaces/ipv4/statistics`, `${R}/interfaces/ipv6/statistics`]);
     vpnRes = await probe('vpn', vpnRes, [`${R}/vpn/policies/statistics`, `${R}/vpn/ipv4/statistics`, `${R}/vpn/ipsec/statistics`, `${R}/vpn/sa/statistics`, `${R}/vpn/tunnels`]);
+    ruleStatsRes = await probe('ruleHits', ruleStatsRes, [`${R}/access-rules/ipv4/statistics`, `${R}/access-rules/ipv4`, `${R}/access-rules/statistics`, `${R}/access-rules/ipv4/hit-count`]);
+    natStatsRes = await probe('natHits', natStatsRes, [`${R}/nat-policies/ipv4/statistics`, `${R}/nat-policies/ipv4`, `${R}/nat-policies/statistics`, `${R}/nat-policies/ipv4/hit-count`]);
 
     const parsed = parseSonicOsJson(
       {
@@ -418,25 +420,29 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
     );
 
     // Merge hit counters from /reporting/* endpoints when available
-    const ruleStatsMap = new Map<string, number>();
-    const ruleReports = extractArray(ruleStatsRes.data, ['access_rules', 'policies']);
-    for (const stat of ruleReports) {
-      const uuid = String(stat.uuid || stat.id || '');
-      const hits = Number(stat.hits ?? stat.hit_count ?? stat.rx_packets ?? 0);
-      if (uuid && Number.isFinite(hits)) {
-        ruleStatsMap.set(uuid, hits);
+    const HIT_KEYS = ['hits', 'hit_count', 'hit_counts', 'rule_hit_count', 'count', 'rx_packets', 'packets'];
+    const flattenStat = (stat: Record<string, unknown>): Record<string, unknown> => {
+      const flat: Record<string, unknown> = { ...stat };
+      for (const k of ['access_rule', 'nat_policy', 'policy', 'statistics', 'stats', 'ipv4']) {
+        const inner = asRecord(stat[k]);
+        if (Object.keys(inner).length > 0) Object.assign(flat, inner);
       }
-    }
-
-    const natStatsMap = new Map<string, number>();
-    const natReports = extractArray(natStatsRes.data, ['nat_policies', 'policies']);
-    for (const stat of natReports) {
-      const uuid = String(stat.uuid || stat.id || '');
-      const hits = Number(stat.hits ?? stat.hit_count ?? stat.rx_packets ?? 0);
-      if (uuid && Number.isFinite(hits)) {
-        natStatsMap.set(uuid, hits);
+      return flat;
+    };
+    const buildHitMap = (data: unknown, keys: string[]) => {
+      const map = new Map<string, number>();
+      for (const raw of extractArray(data, keys)) {
+        const stat = flattenStat(raw);
+        const hits = pickNumber(stat, HIT_KEYS);
+        if (hits === null || !Number.isFinite(hits)) continue;
+        for (const id of [stat.uuid, stat.id]) {
+          if (id !== undefined && id !== null && String(id)) map.set(String(id), hits);
+        }
       }
-    }
+      return map;
+    };
+    const ruleStatsMap = buildHitMap(ruleStatsRes.data, ['access_rules', 'access_rule', 'policies', 'statistics']);
+    const natStatsMap = buildHitMap(natStatsRes.data, ['nat_policies', 'nat_policy', 'policies', 'statistics']);
 
     const rules = parsed.rules.map((r) => ({
       ...r,
@@ -755,6 +761,12 @@ export async function fetchSonicOsAudit(params: SonicOsConnectParams): Promise<S
       // Amostra crua de uma interface (só contadores) para calibrar unidades dos campos do SonicOS
       const sample = ifaceStats.find((i) => /x1|wan/i.test(JSON.stringify(i).slice(0, 200))) ?? ifaceStats[0];
       missingParts.push(`ifaceSample=${JSON.stringify(sample).slice(0, 700)}`);
+    }
+    const firstHit = (d: unknown, k: string[]) => extractArray(d, k)[0];
+    missingParts.push(`ruleHits=${ruleStatsRes.status}(map=${ruleStatsMap.size})`, `natHits=${natStatsRes.status}(map=${natStatsMap.size})`);
+    if (ruleStatsMap.size === 0 && ruleStatsRes.status < 400) {
+      const sm = firstHit(ruleStatsRes.data, ['access_rules', 'access_rule', 'policies', 'statistics']);
+      missingParts.push(`ruleHitSample=${JSON.stringify(sm ?? ruleStatsRes.data).slice(0, 500)}`);
     }
     const diagSummary = `rules=${rulesRes.status}(${rules.length}), nats=${natsRes.status}(${nats.length}), ver=${versionRes.status}, cpu=${cpuRes.status}(${cpuPercent ?? '-'}%), mem=${memRes.status}(${memoryPercent ?? '-'}%), conn=${connRes.status}(${activeConnections ?? '-'}), ifaces=${ifaceCfgRes.status}/${ifaceStatsRes.status}(${interfaces.length}, stats=${ifaceStats.length}), vpn=${vpnRes.status}(${vpns.length})${missingParts.length ? ` | ${missingParts.join(' ')}` : ''}${probeNotes.length ? ` | probe: ${probeNotes.join(' ')}` : ''}`;
     if (rules.length === 0 && interfaces.length === 0) {
