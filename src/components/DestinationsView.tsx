@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Minus, Plus, Radar, RotateCcw, Search } from 'lucide-react';
+import { Minus, Plus, Radar, RotateCcw, Search, X } from 'lucide-react';
 import type { DestinationMetric, DestinationNode, DestinationsReport, FirewallVendor } from '../types.ts';
 import {
   formatBytes,
@@ -37,6 +37,17 @@ function categoryColor(category: string): string {
   return CATEGORY_COLORS[h % CATEGORY_COLORS.length];
 }
 
+function matchesDestQuery(node: DestinationNode, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return (
+    node.label.toLowerCase().includes(q) ||
+    (node.group ?? '').toLowerCase().includes(q) ||
+    node.category.toLowerCase().includes(q) ||
+    node.ips.some((ip) => ip.includes(q))
+  );
+}
+
 function truncate(text: string, max: number): string {
   if (max < 3) return '';
   return text.length <= max ? text : `${text.slice(0, Math.max(1, max - 1))}…`;
@@ -56,6 +67,10 @@ export function DestinationsView({ vendor, refreshToken, onInvestigate, onGoToCo
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [tip, setTip] = useState<{ x: number; y: number } | null>(null);
   const [stageAspect, setStageAspect] = useState(1.55);
+  // Filtro por IP de origem (consulta o servidor) e filtro de destinos (instantâneo, só na tela)
+  const [srcIpInput, setSrcIpInput] = useState('');
+  const [srcIp, setSrcIp] = useState('');
+  const [destQuery, setDestQuery] = useState('');
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -77,18 +92,23 @@ export function DestinationsView({ vendor, refreshToken, onInvestigate, onGoToCo
   const load = useCallback(
     async (signal?: AbortSignal) => {
       try {
-        const res = await fetch(vendorApiUrl(vendor, `/destinations?minutes=${minutes}`), { signal });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const params = new URLSearchParams({ minutes: String(minutes) });
+        if (srcIp) params.set('srcIp', srcIp);
+        const res = await fetch(vendorApiUrl(vendor, `/destinations?${params.toString()}`), { signal });
+        if (!res.ok) {
+          const data = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
         setReport((await res.json()) as DestinationsReport);
         setError(null);
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') return;
-        setError('Não foi possível carregar os destinos.');
+        setError(err instanceof Error && err.message && !/^HTTP \d+$/.test(err.message) ? err.message : 'Não foi possível carregar os destinos.');
       } finally {
         setLoading(false);
       }
     },
-    [vendor, minutes]
+    [vendor, minutes, srcIp]
   );
 
   useEffect(() => {
@@ -108,6 +128,9 @@ export function DestinationsView({ vendor, refreshToken, onInvestigate, onGoToCo
   useEffect(() => {
     setSelectedId(null);
     setCategory('all');
+    setSrcIp('');
+    setSrcIpInput('');
+    setDestQuery('');
   }, [vendor]);
 
   const allNodes = report?.nodes ?? [];
@@ -118,9 +141,10 @@ export function DestinationsView({ vendor, refreshToken, onInvestigate, onGoToCo
       allNodes.filter(
         (n) =>
           (scope === 'all' || (scope === 'public' ? n.scope === 'public' : n.scope !== 'public')) &&
-          (category === 'all' || n.category === category)
+          (category === 'all' || n.category === category) &&
+          matchesDestQuery(n, destQuery)
       ),
-    [allNodes, scope, category]
+    [allNodes, scope, category, destQuery]
   );
 
   const visible = useMemo(
@@ -128,7 +152,7 @@ export function DestinationsView({ vendor, refreshToken, onInvestigate, onGoToCo
     [filtered, metric]
   );
 
-  const noFilter = scope === 'all' && category === 'all';
+  const noFilter = scope === 'all' && category === 'all' && !destQuery.trim();
   const summary = useMemo(
     () =>
       summarizeDestinations(filtered, metric, {
@@ -172,6 +196,15 @@ export function DestinationsView({ vendor, refreshToken, onInvestigate, onGoToCo
     setCategory('all');
     setScope('all');
     setHovered(null);
+    setSrcIp('');
+    setSrcIpInput('');
+    setDestQuery('');
+  };
+
+  const applySource = (ip: string) => {
+    setSrcIpInput(ip);
+    setSrcIp(ip.trim().toLowerCase());
+    setSelectedId(null);
   };
 
   const onStagePointerMove = (e: React.PointerEvent) => {
@@ -315,11 +348,64 @@ export function DestinationsView({ vendor, refreshToken, onInvestigate, onGoToCo
         </button>
       </div>
 
+      <form
+        className="bg-white border border-[var(--fw-border)] rounded-lg p-3 flex flex-wrap items-center gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          applySource(srcIpInput);
+        }}
+      >
+        <label className="flex items-center gap-2 text-xs text-[var(--fw-text-muted)]">
+          IP de origem
+          <input
+            type="text"
+            inputMode="decimal"
+            value={srcIpInput}
+            onChange={(e) => setSrcIpInput(e.target.value)}
+            placeholder="ex.: 10.20.4.45 ou 10.20.4."
+            aria-label="Filtrar destinos pelo IP de origem"
+            className="w-56 px-3 py-1.5 text-xs font-mono border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] text-[var(--fw-text-body)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
+          />
+        </label>
+        <button
+          type="submit"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-[var(--fw-accent)] rounded-md hover:bg-[var(--fw-accent-hover)]"
+        >
+          <Search className="w-3.5 h-3.5" aria-hidden="true" />
+          Aplicar
+        </button>
+        {srcIp && (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-full bg-[var(--fw-surface-alt)] text-[var(--fw-heading)]">
+            Origem: <span className="font-mono">{srcIp}</span>
+            <button
+              type="button"
+              onClick={() => applySource('')}
+              aria-label="Remover filtro de origem"
+              className="text-[var(--fw-text-subtle)] hover:text-[var(--fw-heading)]"
+            >
+              <X className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+          </span>
+        )}
+
+        <label className="flex items-center gap-2 text-xs text-[var(--fw-text-muted)] md:ml-auto">
+          Filtrar destinos
+          <input
+            type="search"
+            value={destQuery}
+            onChange={(e) => setDestQuery(e.target.value)}
+            placeholder="nome, domínio, IP ou categoria"
+            aria-label="Filtrar destinos por nome, domínio, IP ou categoria"
+            className="w-64 px-3 py-1.5 text-xs border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] text-[var(--fw-text-body)] focus:outline-none focus:ring-2 focus:ring-[var(--fw-accent-mid)]"
+          />
+        </label>
+      </form>
+
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_340px] gap-4 items-start">
         <section className="bg-white border border-[var(--fw-border)] rounded-lg p-4" aria-label="Radar de destinos">
           <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
             <h2 className="text-sm font-semibold text-[var(--fw-heading)]">
-              Top {visible.length} destinos contatados pela sua rede
+              Top {visible.length} destinos contatados {srcIp ? `por ${srcIp}` : 'pela sua rede'}
             </h2>
             <p className="text-[11px] text-[var(--fw-text-muted)] tabular-nums">
               {report ? `${report.analyzedEvents.toLocaleString('pt-BR')} eventos analisados` : ''}
@@ -493,6 +579,15 @@ export function DestinationsView({ vendor, refreshToken, onInvestigate, onGoToCo
                         {tipNode.services.slice(0, 3).map((s) => `${s.name} (${s.count})`).join(' · ')}
                       </p>
                     )}
+                    {tipNode.topSources.length > 0 && (
+                      <p className="mt-1.5 text-[11px] text-[var(--fw-text-body)]">
+                        Origens:{' '}
+                        <span className="font-mono">
+                          {tipNode.topSources.slice(0, 3).map((o) => `${o.ip} (${o.count})`).join(' · ')}
+                        </span>
+                        {tipNode.sources > 3 ? ` +${tipNode.sources - 3}` : ''}
+                      </p>
+                    )}
                     <p className="mt-1.5 font-mono text-[10px] text-[var(--fw-text-subtle)] break-all">{tipNode.ips.join(', ')}</p>
                     <p className="mt-1.5 text-[10px] text-[var(--fw-text-subtle)]">Clique para fixar os detalhes</p>
                   </>
@@ -521,7 +616,14 @@ export function DestinationsView({ vendor, refreshToken, onInvestigate, onGoToCo
               ? `Nomes por DNS reverso: ${report.resolver.resolved} resolvidos${report.resolver.pending ? `, ${report.resolver.pending} em andamento` : ''}.`
               : 'DNS reverso desativado: destinos sem FQDN no log aparecem como IP.'}
           </p>
-          {error && <p className="mt-1 text-[11px] text-red-700">{error}</p>}
+          {report?.srcIp && (
+            <p className="mt-1 text-[11px] text-[var(--fw-text-muted)]">
+              Só o tráfego com origem <span className="font-mono">{report.srcIp}</span> (
+              {report.dataSource === 'database' ? 'consulta ao banco de dados' : 'janela em memória'}).
+              {report.truncated ? ' Limite de 20.000 eventos atingido: há mais tráfego além do exibido; restrinja o período.' : ''}
+            </p>
+          )}
+          {error && <p role="alert" className="mt-1 text-[11px] text-red-700">{error}</p>}
         </section>
 
         <aside className="space-y-4">
@@ -612,7 +714,7 @@ export function DestinationsView({ vendor, refreshToken, onInvestigate, onGoToCo
             </section>
           )}
 
-          {selected && <SelectedCard node={selected} onClose={() => setSelectedId(null)} onInvestigate={onInvestigate} />}
+          {selected && <SelectedCard node={selected} onClose={() => setSelectedId(null)} onInvestigate={onInvestigate} onFilterSource={applySource} />}
         </aside>
       </div>
     </div>
@@ -623,10 +725,12 @@ function SelectedCard({
   node,
   onClose,
   onInvestigate,
+  onFilterSource,
 }: {
   node: DestinationNode;
   onClose: () => void;
   onInvestigate: (query: string) => void;
+  onFilterSource: (ip: string) => void;
 }) {
   return (
     <section className="bg-white border border-[var(--fw-border-strong)] rounded-lg p-4 text-xs">
@@ -656,6 +760,26 @@ function SelectedCard({
           </span>
         ))}
       </div>
+      {node.topSources.length > 0 && (
+        <div className="mt-3">
+          <p className="text-[var(--fw-text-muted)]">
+            Quem acessa ({node.sources.toLocaleString('pt-BR')} {node.sources === 1 ? 'origem' : 'origens'})
+          </p>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {node.topSources.map((o) => (
+              <button
+                key={o.ip}
+                type="button"
+                onClick={() => onFilterSource(o.ip)}
+                title="Ver todos os destinos desta origem"
+                className="px-2 py-0.5 rounded-full font-mono bg-[var(--fw-surface-alt)] text-[var(--fw-text-body)] hover:bg-[var(--fw-surface-chip)]"
+              >
+                {o.ip} · {o.count}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <p className="mt-3 font-mono text-[10px] text-[var(--fw-text-subtle)] break-all">{node.ips.join(', ')}</p>
       <button
         type="button"

@@ -10,7 +10,7 @@ import {
   summarizeDestinations,
   type DestinationNode,
 } from '../shared/destinations.ts';
-import { buildDestinationNodes } from '../server/destinationsEngine.ts';
+import { buildDestinationNodes, filterEventsBySource, normalizeSourceFilter } from '../server/destinationsEngine.ts';
 import { createReverseResolver } from '../server/rdns.ts';
 import { parseFortiGateSyslog } from '../server/fortigateParsers.ts';
 import { parseSonicWallSyslog } from '../server/parsers.ts';
@@ -60,7 +60,7 @@ describe('shared destinations helpers', () => {
 
 const node = (over: Partial<DestinationNode>): DestinationNode => ({
   id: 'x', label: 'x', host: null, hostSource: null, ip: '1.1.1.1', ips: [], group: null, scope: 'public',
-  category: 'Web', connections: 1, blocked: 0, bytes: 0, sources: 1, services: [], lastSeen: null, ...over,
+  category: 'Web', connections: 1, blocked: 0, bytes: 0, sources: 1, topSources: [], services: [], lastSeen: null, ...over,
 });
 
 describe('summarizeDestinations', () => {
@@ -155,5 +155,45 @@ describe('createReverseResolver', () => {
     r.schedule(['8.8.8.8']);
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(called, false);
+  });
+});
+
+describe('filtro por IP de origem e origens por destino', () => {
+  const lines = [
+    '<134>id=firewall sn=ABC time="2026-01-01 10:00:00" fw=1.1.1.1 pri=6 c=1024 m=537 msg="x" src=10.0.0.5:1:X0 dst=8.8.8.8:53:X1 proto=udp/53 sent=1 rcvd=1 fw_action="allow"',
+    '<134>id=firewall sn=ABC time="2026-01-01 10:00:01" fw=1.1.1.1 pri=6 c=1024 m=537 msg="x" src=10.0.0.5:2:X0 dst=8.8.8.8:53:X1 proto=udp/53 sent=1 rcvd=1 fw_action="allow"',
+    '<134>id=firewall sn=ABC time="2026-01-01 10:00:02" fw=1.1.1.1 pri=6 c=1024 m=537 msg="x" src=10.0.0.6:3:X0 dst=8.8.8.8:53:X1 proto=udp/53 sent=1 rcvd=1 fw_action="allow"',
+    '<134>id=firewall sn=ABC time="2026-01-01 10:00:03" fw=1.1.1.1 pri=6 c=1024 m=537 msg="x" src=10.0.1.9:4:X0 dst=1.1.1.1:443:X1 proto=tcp/https sent=1 rcvd=1 fw_action="allow"',
+  ].join('\n');
+  const events = parseSonicWallSyslog(lines, 'upload');
+
+  it('lista as origens que mais acessam cada destino', () => {
+    const { nodes } = buildDestinationNodes(events);
+    const dns = nodes.find((n) => n.id === '8.8.8.8')!;
+    assert.equal(dns.sources, 2);
+    assert.deepEqual(dns.topSources, [
+      { ip: '10.0.0.5', count: 2 },
+      { ip: '10.0.0.6', count: 1 },
+    ]);
+  });
+
+  it('o filtro por origem aceita prefixo e restringe os destinos', () => {
+    const only = filterEventsBySource(events, '10.0.0.5');
+    assert.equal(only.length, 2);
+    const { nodes } = buildDestinationNodes(only);
+    assert.equal(nodes.length, 1);
+    assert.equal(nodes[0].connections, 2);
+    assert.equal(filterEventsBySource(events, '10.0.0.').length, 3);
+    assert.equal(filterEventsBySource(events, '').length, events.length);
+    assert.equal(filterEventsBySource(events, '192.168').length, 0);
+  });
+
+  it('valida o texto do filtro', () => {
+    assert.equal(normalizeSourceFilter('  10.0.0.5 '), '10.0.0.5');
+    assert.equal(normalizeSourceFilter('FE80::1'), 'fe80::1');
+    assert.equal(normalizeSourceFilter(''), '');
+    assert.equal(normalizeSourceFilter(undefined), '');
+    assert.equal(normalizeSourceFilter("10.0.0.5' OR 1=1"), null);
+    assert.equal(normalizeSourceFilter('a'.repeat(60)), null);
   });
 });

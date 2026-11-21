@@ -1,4 +1,4 @@
-import { buildDestinationsReport } from './destinationsEngine.ts';
+import { buildDestinationsReport, filterEventsBySource, normalizeSourceFilter } from './destinationsEngine.ts';
 import { getSharedResolver } from './rdns.ts';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -1469,6 +1469,15 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
     (handler: (req: express.Request, res: express.Response) => Promise<void>) =>
     (req: express.Request, res: express.Response) => {
       handler(req, res).catch((err) => {
+        if (err instanceof SyslogSearchTimeoutError) {
+          if (!res.headersSent) {
+            res.status(504).json({
+              error: `${err.message}. Restrinja o período ou os filtros e tente de novo.`,
+              code: 'timeout',
+            });
+          }
+          return;
+        }
         const msg = err instanceof Error ? err.message : String(err);
         appLog.error(vendor, 'api', `Erro em ${req.method} ${req.path}`, msg);
         if (!res.headersSent) {
@@ -1927,6 +1936,9 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
 
   // --- Syslogs ---------------------------------------------------------------
 
+  /** Eventos máximos lidos do banco quando o radar é filtrado por IP de origem. */
+  const DESTINATIONS_SOURCE_QUERY_LIMIT = 20_000;
+
   // --- Radar de destinos -------------------------------------------------------
   // Agrega os destinos (FQDN do log ou DNS reverso, senão IP) da janela recente em memória.
   router.get(
@@ -1936,9 +1948,34 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
       const minutesRaw = Number(req.query.minutes ?? 0);
       const minutes = Number.isFinite(minutesRaw) && minutesRaw > 0 ? Math.min(43200, Math.floor(minutesRaw)) : 0;
       const sinceIso = minutes > 0 ? new Date(Date.now() - minutes * 60 * 1000).toISOString() : undefined;
-      const events = sinceIso
+      const srcIp = normalizeSourceFilter(req.query.srcIp);
+      if (srcIp === null) {
+        res.status(400).json({ error: 'IP de origem inválido. Use só números, pontos e dois-pontos (ex.: 10.20.4.45).' });
+        return;
+      }
+
+      let events = sinceIso
         ? site.syslogs.filter((ev) => !ev.ingestedAt || ev.ingestedAt >= sinceIso)
         : site.syslogs;
+      let dataSource: 'memory' | 'database' = 'memory';
+      let truncated = false;
+      if (srcIp) {
+        if (usePg) {
+          // Filtro por origem: a janela em memória pode não conter o histórico desse host, então
+          // consulta o banco (limitado e com tempo máximo, como a tela de Syslogs)
+          await flushPendingInserts();
+          const rows = await pgStore.querySyslogsSince(
+            site.id,
+            sinceIso ?? new Date(0).toISOString(),
+            srcIp,
+            DESTINATIONS_SOURCE_QUERY_LIMIT
+          );
+          truncated = rows.length >= DESTINATIONS_SOURCE_QUERY_LIMIT;
+          events = rows;
+          dataSource = 'database';
+        }
+        events = filterEventsBySource(events, srcIp);
+      }
       const resolver = getSharedResolver();
       const report = buildDestinationsReport({
         events,
@@ -1947,6 +1984,9 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
         lookupHost: (ip) => resolver.lookupCached(ip),
         resolver: { enabled: resolver.enabled, ...resolver.stats() },
       });
+      report.srcIp = srcIp;
+      report.dataSource = dataSource;
+      report.truncated = truncated;
       // Resolve em segundo plano os IPs públicos mais ativos que ainda não têm nome
       resolver.schedule(
         report.nodes.filter((n) => n.host === null && n.scope === 'public').slice(0, 40).map((n) => n.ip)

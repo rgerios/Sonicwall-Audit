@@ -25,6 +25,8 @@ export interface DestinationNode {
   blocked: number;
   bytes: number;
   sources: number;
+  /** Quem mais acessa este destino (IPs de origem), do maior para o menor. */
+  topSources: Array<{ ip: string; count: number }>;
   services: DestinationService[];
   lastSeen: string | null;
 }
@@ -38,6 +40,12 @@ export interface DestinationsReport {
   resolver: { enabled: boolean; resolved: number; pending: number };
   nodes: DestinationNode[];
   omitted: { destinations: number; connections: number };
+  /** Filtro por IP de origem aplicado (vazio = todo o tráfego). */
+  srcIp?: string;
+  /** De onde vieram os eventos: janela em memória ou consulta ao banco (filtro por origem). */
+  dataSource?: 'memory' | 'database';
+  /** true quando a consulta ao banco atingiu o limite de eventos e há mais dados que o exibido. */
+  truncated?: boolean;
 }
 
 export type DestinationMetric = 'connections' | 'bytes';

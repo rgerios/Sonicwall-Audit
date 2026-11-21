@@ -205,6 +205,23 @@ describe('busca de syslogs no PostgreSQL', { skip: !URL }, () => {
     }
   });
 
+  it('a consulta por período e IP (radar de destinos) devolve todos os eventos do host, também os antigos', async () => {
+    await pool.query(
+      `INSERT INTO syslogs (site_id, vendor, id, ingested_at, event_at, event_timestamp, priority, action, severity, search_text, payload_json)
+       SELECT $1, 'sonicwall', 'old-src-' || g, now() - interval '5 days' - (g || ' seconds')::interval,
+              now() - interval '5 days' - (g || ' seconds')::interval, 'x', 6, 'allow', 'info', 'old 10.77.0.9 9.9.9.9',
+              jsonb_build_object('id', 'old-src-' || g, 'srcIp', '10.77.0.9')
+       FROM generate_series(1, 40) g`,
+      [SEARCH_SITE]
+    );
+    const rows = await store.querySyslogsSince(SEARCH_SITE, new Date(0).toISOString(), '10.77.0.9', 1000);
+    assert.equal(rows.length, 40);
+    const recent = await store.querySyslogsSince(SEARCH_SITE, new Date(Date.now() - 3600_000).toISOString(), '10.77.0.9', 1000);
+    assert.equal(recent.length, 0, 'o período restringe');
+    const limited = await store.querySyslogsSince(SEARCH_SITE, new Date(0).toISOString(), '10.77.0.9', 10);
+    assert.equal(limited.length, 10, 'o limite é respeitado');
+  });
+
   it('caracteres especiais do LIKE são tratados como texto', async () => {
     assert.equal((await q({ srcIp: '%' })).matched, 0);
     assert.equal((await q({ search: '_' })).matched, 0);

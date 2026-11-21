@@ -19,7 +19,7 @@ interface Accumulator {
   connections: number;
   blocked: number;
   bytes: number;
-  sources: Set<string>;
+  sources: Map<string, number>;
   services: Map<string, number>;
   appCategories: Map<string, number>;
   lastSeen: string | null;
@@ -80,7 +80,7 @@ export function buildDestinationNodes(
         connections: 0,
         blocked: 0,
         bytes: 0,
-        sources: new Set(),
+        sources: new Map(),
         services: new Map(),
         appCategories: new Map(),
         lastSeen: null,
@@ -91,7 +91,7 @@ export function buildDestinationNodes(
     if (ev.action === 'drop' || ev.action === 'deny' || ev.action === 'reset') a.blocked += 1;
     a.bytes += (ev.bytesSent || 0) + (ev.bytesRcvd || 0);
     bump(a.ips, ip);
-    if (a.sources.size < MAX_SOURCES_TRACKED && ev.srcIp) a.sources.add(ev.srcIp);
+    if (ev.srcIp && (a.sources.has(ev.srcIp) || a.sources.size < MAX_SOURCES_TRACKED)) bump(a.sources, ev.srcIp);
     bump(a.services, serviceLabel(ev.protocol, ev.dstPort, ev.appName));
     if (hints.appCategory) bump(a.appCategories, hints.appCategory);
     const seen = ev.ingestedAt || ev.timestamp || null;
@@ -120,6 +120,10 @@ export function buildDestinationNodes(
       blocked: a.blocked,
       bytes: a.bytes,
       sources: a.sources.size,
+      topSources: [...a.sources.entries()]
+        .sort((x, y) => y[1] - x[1])
+        .slice(0, 5)
+        .map(([ip, count]) => ({ ip, count })),
       services: [...a.services.entries()]
         .sort((x, y) => y[1] - x[1])
         .slice(0, 5)
@@ -160,4 +164,18 @@ export function buildDestinationsReport(params: {
     nodes,
     omitted,
   };
+}
+
+/** IPs de origem aceitos no filtro: só caracteres de IPv4/IPv6 (ou prefixos deles). */
+export function normalizeSourceFilter(raw: unknown): string | null {
+  const value = String(raw ?? '').trim().toLowerCase();
+  if (!value) return '';
+  if (value.length > 45 || !/^[0-9a-f:.]+$/.test(value)) return null;
+  return value;
+}
+
+/** Mantém só os eventos cujo IP de origem contém o texto do filtro (mesma regra da tela de Syslogs). */
+export function filterEventsBySource(events: SyslogEvent[], srcIp: string): SyslogEvent[] {
+  if (!srcIp) return events;
+  return events.filter((ev) => (ev.srcIp || '').toLowerCase().includes(srcIp));
 }

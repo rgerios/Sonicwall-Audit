@@ -1097,11 +1097,25 @@ export class PostgresStore {
       where.push(`search_text LIKE $${params.length}`);
     }
     params.push(limit);
-    const res = await pool.query<{ payload_json: SyslogEvent }>(
-      `SELECT payload_json FROM syslogs WHERE ${where.join(' AND ')} ORDER BY event_at DESC LIMIT $${params.length}`,
-      params
-    );
-    return res.rows.map((r) => r.payload_json);
+    const timeoutMs = Math.max(1000, Number(process.env.SYSLOG_SEARCH_TIMEOUT_MS) || 20_000);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Mesmo teto de tempo da busca de syslogs: uma consulta pesada nao segura o disco de todos
+      await client.query(`SET LOCAL statement_timeout = ${Math.floor(timeoutMs)}`);
+      const res = await client.query<{ payload_json: SyslogEvent }>(
+        `SELECT payload_json FROM syslogs WHERE ${where.join(' AND ')} ORDER BY event_at DESC LIMIT $${params.length}`,
+        params
+      );
+      await client.query('COMMIT');
+      return res.rows.map((r) => r.payload_json);
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      if ((err as { code?: string }).code === '57014') throw new SyslogSearchTimeoutError(timeoutMs);
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   /**
