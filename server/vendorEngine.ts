@@ -8,6 +8,8 @@ import {
   normalizeSourceFilter,
   type DestinationFilter,
 } from './destinationsEngine.ts';
+import { buildBehaviorReport, readOriginCountry, writeOriginCountry } from './behaviorEngine.ts';
+import { createIntel } from './intel.ts';
 import { getSharedResolver } from './rdns.ts';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -2050,6 +2052,80 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
         report.nodes.filter((n) => n.host === null && n.scope === 'public').slice(0, 40).map((n) => n.ip)
       );
       res.json(report);
+    })
+  );
+
+  // --- Behavior: GeoIP / ASN / reputação 100% offline (somente SonicWall por enquanto) ---------------
+
+  const intel = createIntel(dataDir);
+  if (vendor === 'sonicwall') void intel.start().catch(() => undefined);
+
+  router.get(
+    '/behavior',
+    asyncRoute(async (req, res) => {
+      if (vendor !== 'sonicwall') {
+        res.status(404).json({ error: 'Behavior ainda não está disponível neste ambiente.' });
+        return;
+      }
+      const site = siteFor(req);
+      const minutes = radarMinutes(req);
+      const sinceIso = minutes > 0 ? new Date(Date.now() - minutes * 60 * 1000).toISOString() : undefined;
+      let events = sinceIso
+        ? site.syslogs.filter((ev) => !ev.ingestedAt || ev.ingestedAt >= sinceIso)
+        : site.syslogs;
+      let dataSource: 'memory' | 'database' = 'memory';
+      let truncated = false;
+      if (usePg) {
+        const oldestInMemory = site.syslogs.length > 0 ? site.syslogs[site.syslogs.length - 1]?.ingestedAt : null;
+        if (minutes === 0 || site.syslogs.length >= MEMORY_WINDOW || (oldestInMemory && sinceIso && oldestInMemory > sinceIso)) {
+          await flushPendingInserts();
+          const rows = await pgStore.querySyslogsSince(
+            site.id,
+            sinceIso ?? new Date(0).toISOString(),
+            [],
+            RADAR_DB_QUERY_LIMIT,
+            {}
+          );
+          truncated = rows.length >= RADAR_DB_QUERY_LIMIT;
+          events = rows;
+          dataSource = 'database';
+        }
+      }
+      const originCountry = await readOriginCountry(dataDir, site.id);
+      res.json(buildBehaviorReport({ events, minutes, intel, originCountry, dataSource, truncated }));
+    })
+  );
+
+  router.post(
+    '/behavior/intel/update',
+    asyncRoute(async (_req, res) => {
+      if (vendor !== 'sonicwall') {
+        res.status(404).json({ error: 'Indisponível neste ambiente.' });
+        return;
+      }
+      if (intel.status().updating) {
+        res.status(409).json({ error: 'Já existe uma atualização em andamento.', intel: intel.status() });
+        return;
+      }
+      void intel.update().catch(() => undefined);
+      res.status(202).json({ ok: true, intel: intel.status() });
+    })
+  );
+
+  router.get('/behavior/intel', (_req, res) => {
+    res.json(intel.status());
+  });
+
+  router.post(
+    '/behavior/origin',
+    asyncRoute(async (req, res) => {
+      const code = String(req.body?.country ?? '').toUpperCase();
+      if (!/^[A-Z]{2}$/.test(code)) {
+        res.status(400).json({ error: 'Informe o país com 2 letras (ex.: BR).' });
+        return;
+      }
+      await writeOriginCountry(dataDir, siteFor(req).id, code);
+      res.json({ ok: true, country: code });
     })
   );
 

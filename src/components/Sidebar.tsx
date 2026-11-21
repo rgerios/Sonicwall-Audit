@@ -12,6 +12,7 @@ import {
   ServerCog,
   ShieldAlert,
   Terminal,
+  Globe2,
 } from 'lucide-react';
 import type { ActiveSection, AuditOverview, FirewallVendor } from '../types.ts';
 import fortinetLogo from '../assets/images/fortinet-logo.svg';
@@ -81,6 +82,7 @@ export function Sidebar({
       label: 'Destinos',
       icon: Radar,
     },
+    ...(vendor === 'sonicwall' ? [{ id: 'behavior' as const, label: 'Behavior', icon: Globe2 }] : []),
     {
       id: 'rules',
       label: 'Regras Sem Uso',

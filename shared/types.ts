@@ -4,6 +4,7 @@ export type ActiveSection =
   | 'overview'
   | 'syslogs'
   | 'destinations'
+  | 'behavior'
   | 'rules'
   | 'nats'
   | 'reports'
@@ -504,3 +505,12 @@ export type {
 } from './destinations.ts';
 
 export type { SourceNode, SourcesReport } from './sources.ts';
+
+export type {
+  BehaviorCountry,
+  BehaviorFlow,
+  BehaviorIp,
+  BehaviorIntelStatus,
+  BehaviorReport,
+  BehaviorThreatCategory,
+} from './behavior.ts';

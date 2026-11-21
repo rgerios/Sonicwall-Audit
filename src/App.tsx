@@ -18,6 +18,9 @@ const AiAnalystView = lazy(() =>
 const ConnectLinuxView = lazy(() =>
   import('./components/ConnectLinuxView.tsx').then((m) => ({ default: m.ConnectLinuxView }))
 );
+const BehaviorView = lazy(() =>
+  import('./components/BehaviorView.tsx').then((m) => ({ default: m.BehaviorView }))
+);
 const DestinationsView = lazy(() =>
   import('./components/DestinationsView.tsx').then((m) => ({ default: m.DestinationsView }))
 );
@@ -392,6 +395,14 @@ function AppShell() {
                   onAnalyzeEvent={handleAnalyzeEventWithAi}
                   pendingQuery={pendingSyslogQuery}
                   onConsumePendingQuery={() => setPendingSyslogQuery(null)}
+                />
+              )}
+
+              {activeSection === 'behavior' && activeVendor === 'sonicwall' && (
+                <BehaviorView
+                  vendor={activeVendor}
+                  refreshToken={refreshToken}
+                  onInvestigate={handleInvestigateSyslog}
                 />
               )}
 

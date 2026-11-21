@@ -101,6 +101,7 @@ export function TopBar({
     overview: 'Visão Geral',
     syslogs: 'Análise de Syslogs',
     destinations: 'Radar de Destinos',
+    behavior: 'Behavior: Mapa de Tráfego e Reputação',
     rules: 'Regras de Firewall Sem Uso',
     nats: vendor === 'fortigate' ? 'VIPs, IP Pools & NAT Sem Uso' : 'Políticas NAT Sem Uso',
     reports: 'Relatório Consolidado',
