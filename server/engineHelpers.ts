@@ -264,7 +264,8 @@ export function deriveInterfaceThroughput(
   previousTelemetry: TelemetrySnapshot | undefined,
   previousSyncAt: string | null | undefined,
   nextTelemetry: TelemetrySnapshot,
-  nowIso: string
+  nowIso: string,
+  capToLinkSpeed = false
 ): TelemetrySnapshot {
   if (!previousTelemetry?.interfaces?.length || !previousSyncAt) {
     return nextTelemetry;
@@ -284,8 +285,8 @@ export function deriveInterfaceThroughput(
 
     const deltaRx = curr.rxBytes >= prev.rxBytes ? curr.rxBytes - prev.rxBytes : 0;
     const deltaTx = curr.txBytes >= prev.txBytes ? curr.txBytes - prev.txBytes : 0;
-    // Taxa acima de ~2x a velocidade do link é impossível: contador reiniciado ou unidade errada.
-    const cap = curr.linkSpeedMbps > 0 ? curr.linkSpeedMbps * 2 : Number.POSITIVE_INFINITY;
+    // (opt-in, hoje só SonicWall) Taxa acima de ~2x a velocidade do link é impossível: contador reiniciado ou unidade errada.
+    const cap = capToLinkSpeed && curr.linkSpeedMbps > 0 ? curr.linkSpeedMbps * 2 : Number.POSITIVE_INFINITY;
     const toMbps = (delta: number) => {
       const v = Number(((delta * 8) / (elapsedSec * 1_000_000)).toFixed(2));
       return v > cap ? 0 : v;
