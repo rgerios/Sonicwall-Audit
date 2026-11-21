@@ -116,8 +116,18 @@ services:
         condition: service_healthy
       backend-fortigate:
         condition: service_healthy
+    # HTTPS na porta 8443 (certificado gerado no primeiro start, guardado no volume fwaudit_certs).
+    # A porta HTTP só redireciona para HTTPS. Para usar 443/80, defina FRONTEND_HTTPS_PORT=443 e FRONTEND_PORT=80.
     ports:
       - "${FRONTEND_PORT:-8080}:80"
+      - "${FRONTEND_HTTPS_PORT:-8443}:443"
+    environment:
+      HTTPS_PUBLIC_PORT: ${FRONTEND_HTTPS_PORT:-8443}
+      # Nomes e IPs que o certificado deve cobrir, separados por vírgula (o deploy.sh preenche o IP do servidor)
+      TLS_HOSTNAMES: ${TLS_HOSTNAMES:-}
+      TLS_IPS: ${TLS_IPS:-}
+    volumes:
+      - fwaudit_certs:/etc/nginx/certs
     networks:
       - fwaudit_net
 
@@ -127,6 +137,8 @@ volumes:
   fwaudit_sonicwall_data:
     driver: local
   fwaudit_fortigate_data:
+    driver: local
+  fwaudit_certs:
     driver: local
 
 networks:

@@ -168,7 +168,22 @@ env_value() {
   value="$(grep -E "^$1=" .env 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '"' || true)"
   printf '%s' "${value:-$2}"
 }
+# HTTPS: o painel é servido em HTTPS (certificado local gerado no primeiro start) e a porta HTTP só redireciona.
+# Em instalações antigas, acrescenta as variáveis novas ao .env sem mexer no resto.
+ensure_env() {
+  if ! grep -qE "^$1=" .env; then
+    printf '%s=%s\n' "$1" "$2" >> .env
+    info "Acrescentado ao .env: $1"
+  fi
+}
+SERVER_IPS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | paste -sd, - || true)"
+SERVER_HOSTNAME="$(hostname -f 2>/dev/null || hostname 2>/dev/null || true)"
+ensure_env FRONTEND_HTTPS_PORT 8443
+ensure_env TLS_IPS "${SERVER_IPS}"
+ensure_env TLS_HOSTNAMES "${SERVER_HOSTNAME}"
+
 FRONTEND_PORT="$(env_value FRONTEND_PORT 8080)"
+FRONTEND_HTTPS_PORT="$(env_value FRONTEND_HTTPS_PORT 8443)"
 SONICWALL_UDP_PORT="$(env_value SONICWALL_UDP_PORT 5514)"
 FORTIGATE_UDP_PORT="$(env_value FORTIGATE_UDP_PORT 5515)"
 
@@ -177,10 +192,11 @@ FORTIGATE_UDP_PORT="$(env_value FORTIGATE_UDP_PORT 5515)"
 # ---------------------------------------------------------------------------
 if command -v ufw >/dev/null 2>&1 && $SUDO ufw status 2>/dev/null | grep -q "Status: active"; then
   info "Liberando portas no UFW"
-  $SUDO ufw allow "${FRONTEND_PORT}/tcp" comment "FW Audit Web UI" >/dev/null
+  $SUDO ufw allow "${FRONTEND_PORT}/tcp" comment "FW Audit Web UI (redireciona para HTTPS)" >/dev/null
+  $SUDO ufw allow "${FRONTEND_HTTPS_PORT}/tcp" comment "FW Audit Web UI HTTPS" >/dev/null
   $SUDO ufw allow "${SONICWALL_UDP_PORT}/udp" comment "FW Audit SonicWall Syslog" >/dev/null
   $SUDO ufw allow "${FORTIGATE_UDP_PORT}/udp" comment "FW Audit FortiGate Syslog" >/dev/null
-  echo "Portas liberadas: ${FRONTEND_PORT}/tcp, ${SONICWALL_UDP_PORT}/udp, ${FORTIGATE_UDP_PORT}/udp"
+  echo "Portas liberadas: ${FRONTEND_PORT}/tcp, ${FRONTEND_HTTPS_PORT}/tcp, ${SONICWALL_UDP_PORT}/udp, ${FORTIGATE_UDP_PORT}/udp"
 else
   info "UFW inativo ou ausente: nenhuma regra de firewall alterada"
 fi
@@ -226,7 +242,12 @@ SERVER_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
 SERVER_IP="${SERVER_IP:-IP_DO_SERVIDOR}"
 
 info "FW Audit no ar"
-echo "  Painel:            http://${SERVER_IP}:${FRONTEND_PORT}"
+CA_FINGERPRINT="$($DOCKER compose exec -T frontend openssl x509 -in /etc/nginx/certs/ca.crt -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 || true)"
+echo "  Painel (HTTPS):    https://${SERVER_IP}:${FRONTEND_HTTPS_PORT}"
+echo "  (http://${SERVER_IP}:${FRONTEND_PORT} apenas redireciona para o HTTPS)"
+echo "  Certificado:       gerado localmente. Para o navegador deixar de avisar, importe a CA UMA vez:"
+echo "                     baixe http://${SERVER_IP}:${FRONTEND_PORT}/fwaudit-ca.crt e instale como 'Autoridade de Certificação Raiz Confiável'"
+[ -n "$CA_FINGERPRINT" ] && echo "                     Impressão digital (SHA-256) da CA: ${CA_FINGERPRINT}"
 echo "  Syslog SonicWall:  ${SERVER_IP} porta UDP ${SONICWALL_UDP_PORT}"
 echo "  Syslog FortiGate:  ${SERVER_IP} porta UDP ${FORTIGATE_UDP_PORT}"
 if $CREATED_ENV; then

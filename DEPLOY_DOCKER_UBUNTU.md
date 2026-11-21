@@ -72,7 +72,7 @@ docker compose logs -f backend-sonicwall backend-fortigate
 Acesse no navegador:
 
 ```text
-http://IP_DO_SERVIDOR_UBUNTU:8080
+https://IP_DO_SERVIDOR_UBUNTU:8443
 ```
 
 Na primeira abertura, crie seu usuário e senha únicos pela tela inicial (ou defina `FWAUDIT_ADMIN_USER` / `FWAUDIT_ADMIN_PASS` no `.env`).
@@ -84,7 +84,8 @@ Na primeira abertura, crie seu usuário e senha únicos pela tela inicial (ou de
 Libere a porta web e as duas portas UDP dedicadas para receber syslogs dos firewalls SonicWall e FortiGate:
 
 ```bash
-sudo ufw allow 8080/tcp comment "FW Audit Web UI"
+sudo ufw allow 8443/tcp comment "FW Audit Web UI HTTPS"
+sudo ufw allow 8080/tcp comment "FW Audit Web UI (redireciona para HTTPS)"
 sudo ufw allow 5514/udp comment "FW Audit SonicWall Syslog UDP"
 sudo ufw allow 5515/udp comment "FW Audit FortiGate Syslog UDP"
 sudo ufw reload
@@ -165,3 +166,58 @@ Se puder, mova o volume do banco (`fwaudit_pgdata`) para um SSD: é o ganho mais
   percorrem o índice de tempo e param ao juntar a página.
 - O índice `idx_syslogs_vendor_site_ingested` (149 MB por 2 milhões de linhas, sem nenhuma consulta que o use) foi
   removido, e a tabela de syslogs ganhou um autovacuum mais frequente.
+
+---
+
+## HTTPS (certificado local)
+
+O painel é servido **somente em HTTPS**. A porta HTTP (`8080`) apenas redireciona para o HTTPS (`8443`).
+
+- **O certificado é gerado sozinho** no primeiro start do container `fwaudit-frontend` e guardado no volume `fwaudit_certs`.
+  Ele é assinado por uma **CA local** ("FW Audit Local CA", 10 anos); o certificado do servidor vale 825 dias e é
+  renovado automaticamente 30 dias antes de vencer.
+- **O certificado cobre** `localhost`, o hostname do servidor e os IPs em `TLS_HOSTNAMES` e `TLS_IPS` (no `.env`,
+  separados por vírgula; o `deploy.sh` preenche com o IP do servidor). Se o IP ou o nome mudar, edite o `.env` e rode
+  `docker compose up -d`: o certificado do servidor é refeito e a CA continua a mesma.
+- **TLS 1.2 e 1.3**, HTTP/2, e o cookie de sessão sai com o atributo `Secure`.
+
+### Fazer o navegador confiar (uma única vez)
+
+Sem isso, o navegador mostra "conexão não é particular" (o acesso funciona, é só o aviso). Importe a **CA**, não o
+certificado do servidor: assim as renovações continuam confiáveis.
+
+1. Baixe a CA: `http://IP_DO_SERVIDOR:8080/fwaudit-ca.crt` (também em `https://IP_DO_SERVIDOR:8443/fwaudit-ca.crt`).
+2. Confira a impressão digital (SHA-256) com a mostrada ao final do `deploy.sh` ou com:
+   ```bash
+   docker compose exec -T frontend openssl x509 -in /etc/nginx/certs/ca.crt -noout -fingerprint -sha256
+   ```
+3. Instale como **Autoridade de Certificação Raiz Confiável**:
+   - **Windows:** duplo clique no arquivo > Instalar certificado > Computador local > "Autoridades de Certificação Raiz Confiáveis".
+   - **macOS:** abra no Acesso às Chaves, dê duplo clique no certificado e em "Confiança" escolha "Sempre Confiar".
+   - **Linux (Chrome/Firefox):** importe em Configurações > Certificados > Autoridades (Firefox usa o próprio repositório).
+
+> Importe a CA apenas nos computadores dos administradores. Quem tiver a chave da CA (volume `fwaudit_certs`) consegue
+> emitir certificados aceitos por esses computadores; proteja o acesso ao servidor.
+
+### Usar o seu próprio certificado
+
+Coloque `server.crt` (com a cadeia, se houver) e `server.key` no volume e reinicie o frontend. O script não altera
+arquivos que ele não criou:
+
+```bash
+docker cp meu.crt fwaudit-frontend:/etc/nginx/certs/server.crt
+docker cp minha.key fwaudit-frontend:/etc/nginx/certs/server.key
+docker compose restart frontend
+```
+
+Para voltar ao certificado automático, apague `server.crt`, `server.key` e `.fwaudit-generated` desse volume e reinicie.
+
+### Portas padrão (443 e 80)
+
+No `.env`: `FRONTEND_HTTPS_PORT=443` e `FRONTEND_PORT=80`, depois `docker compose up -d`. Libere as portas no firewall do servidor.
+
+### Observações
+
+- Não ativei o **HSTS** de propósito: com certificado local ele impediria o navegador de permitir a exceção.
+- Se o painel ficar atrás de outro proxy/balanceador com TLS, ele deve enviar `X-Forwarded-Proto: https` para o cookie sair como `Secure`.
+- `/api/health` e `/healthz` respondem na porta HTTP para monitoramento.
