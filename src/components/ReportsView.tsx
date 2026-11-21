@@ -519,10 +519,9 @@ function AuditReportView({
   );
 }
 
-/** SonicWall: relatório de Auditoria + relatório de Acessos e Consumo (FortiGate continua só com Auditoria). */
+/** Relatório de Auditoria + relatório de Acessos e Consumo (SonicWall e FortiGate). */
 export function ReportsView(props: ReportsViewProps) {
   const [tab, setTab] = useState<'audit' | 'access'>('audit');
-  if (props.vendor !== 'sonicwall') return <AuditReportView {...props} />;
   return (
     <div className="space-y-4">
       <div className="no-print inline-flex p-1 bg-[var(--fw-surface-alt)] rounded-lg" role="tablist" aria-label="Tipo de relatório">
