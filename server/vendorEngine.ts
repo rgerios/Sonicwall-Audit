@@ -1302,7 +1302,7 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
           site.appliance.lastSyncAt,
           audit.telemetry,
           nowIso,
-          vendor === 'sonicwall'
+          false
         );
         site.appliance = {
           model: audit.model,
@@ -1353,7 +1353,7 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
           site.appliance.lastSyncAt,
           audit.telemetry,
           nowIso,
-          vendor === 'sonicwall'
+          true
         );
         site.appliance = {
           model: audit.model,
