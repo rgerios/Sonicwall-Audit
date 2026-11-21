@@ -285,8 +285,9 @@ export function deriveInterfaceThroughput(
 
     const deltaRx = curr.rxBytes >= prev.rxBytes ? curr.rxBytes - prev.rxBytes : 0;
     const deltaTx = curr.txBytes >= prev.txBytes ? curr.txBytes - prev.txBytes : 0;
-    // (opt-in, hoje só SonicWall) Taxa acima de ~2x a velocidade do link é impossível: contador reiniciado ou unidade errada.
-    const cap = capToLinkSpeed && curr.linkSpeedMbps > 0 ? curr.linkSpeedMbps * 2 : Number.POSITIVE_INFINITY;
+    // (SonicWall e FortiGate) Taxa acima de ~2x a velocidade do link é impossível: contador reiniciado ou unidade errada.
+    // piso de 10 Gbps: velocidade de link mal informada pela API não pode zerar uma leitura real
+    const cap = capToLinkSpeed ? Math.max(curr.linkSpeedMbps * 2, 10_000) : Number.POSITIVE_INFINITY;
     const toMbps = (delta: number) => {
       const v = Number(((delta * 8) / (elapsedSec * 1_000_000)).toFixed(2));
       return v > cap ? 0 : v;

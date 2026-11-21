@@ -349,7 +349,7 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
     const classified = classifyPolicies(site.rules, site.nats, {
       observedSince: site.hitsObservedSince,
       uptimeSeconds: site.appliance.uptimeSeconds,
-      preferApplianceHits: vendor === 'sonicwall',
+      preferApplianceHits: true,
     });
     site.rules = classified.rules;
     site.nats = classified.nats;
@@ -1307,7 +1307,7 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
           site.appliance.lastSyncAt,
           audit.telemetry,
           nowIso,
-          false
+          true
         );
         site.appliance = {
           model: audit.model,
