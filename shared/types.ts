@@ -523,5 +523,8 @@ export type {
   AccessReportData,
   AccessServiceRow,
   AccessSourceRow,
+  ReportFileInfo,
+  ReportScheduleConfig,
+  ReportScheduleState,
   AccessTimelinePoint,
 } from './accessReport.ts';

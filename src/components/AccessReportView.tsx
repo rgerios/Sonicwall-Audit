@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { AlertTriangle, Download, FileDown, Loader2, Printer } from 'lucide-react';
-import type { AccessReportData, FirewallVendor } from '../types.ts';
+import { AlertTriangle, CalendarClock, Download, ExternalLink, FileDown, Loader2, Printer, Trash2 } from 'lucide-react';
+import type { AccessReportData, FirewallVendor, ReportScheduleState } from '../types.ts';
 import { formatBytes } from '../../shared/destinations.ts';
 import { downloadCsv } from '../utils/csv.ts';
 import { exportAccessReportPdf, periodLabel } from '../utils/exportAccessPdf.ts';
@@ -35,6 +35,175 @@ function Bar({ value, color = '#38bdf8' }: { value: number; color?: string }) {
     <div className="h-1.5 rounded-full bg-[var(--fw-surface-alt)] overflow-hidden">
       <div className="h-full rounded-full" style={{ width: `${Math.max(2, Math.min(100, value))}%`, background: color }} />
     </div>
+  );
+}
+
+
+const FREQUENCIES = [
+  { hours: 24, label: 'A cada 24 horas' },
+  { hours: 72, label: 'A cada 3 dias' },
+  { hours: 168, label: 'A cada 7 dias' },
+];
+
+const whenBr = (iso: string | null) => (iso ? new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—');
+
+/** Agendamento: o servidor gera o relatório em HTML estático no horário e deixa pronto para baixar. */
+function SchedulePanel({ vendor }: { vendor: FirewallVendor }) {
+  const [state, setState] = useState<ReportScheduleState | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try {
+      const res = await fetch(vendorApiUrl(vendor, '/reports/schedule'));
+      if (res.ok) setState((await res.json()) as ReportScheduleState);
+    } catch {
+      /* mantém o estado anterior */
+    }
+  };
+  useEffect(() => {
+    void load();
+    // enquanto gera, acompanha a lista
+    const id = window.setInterval(() => void load(), 4000);
+    return () => window.clearInterval(id);
+  }, [vendor]);
+
+  const save = async (patch: Record<string, unknown>) => {
+    setMsg(null);
+    try {
+      const res = await fetch(vendorApiUrl(vendor, '/reports/schedule'), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      const data = (await res.json().catch(() => ({}))) as ReportScheduleState & { error?: string };
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setState(data);
+      setMsg('Agendamento salvo.');
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : 'Falha ao salvar.');
+    }
+  };
+
+  const runNow = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await fetch(vendorApiUrl(vendor, '/reports/schedule/run'), { method: 'POST' });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setMsg('Gerando o relatório… ele aparece na lista abaixo quando ficar pronto.');
+      void load();
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : 'Falha ao iniciar.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (id: string) => {
+    if (!window.confirm('Apagar este relatório? Não dá para desfazer.')) return;
+    await fetch(vendorApiUrl(vendor, `/reports/files/${id}`), { method: 'DELETE' });
+    void load();
+  };
+
+  const cfg = state?.config;
+  return (
+    <section className="no-print bg-white border border-[var(--fw-border)] rounded-lg p-4 space-y-3" aria-label="Agendamento de relatórios">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-[var(--fw-heading)] inline-flex items-center gap-2">
+          <CalendarClock className="w-4 h-4" aria-hidden="true" /> Relatório agendado (HTML estático, pronto para baixar)
+        </h3>
+        <label className="inline-flex items-center gap-2 text-xs font-medium text-[var(--fw-heading)]">
+          <input type="checkbox" checked={cfg?.enabled ?? false} onChange={(e) => void save({ enabled: e.target.checked })} className="w-4 h-4 accent-[var(--fw-accent)]" />
+          Gerar automaticamente
+        </label>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-3 text-xs">
+        <label className="flex flex-col gap-1 text-[var(--fw-text-muted)]">
+          Frequência (e período analisado)
+          <select value={cfg?.everyHours ?? 24} onChange={(e) => void save({ everyHours: Number(e.target.value) })} className="px-2 py-1.5 border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] text-[var(--fw-text-body)]">
+            {FREQUENCIES.map((f) => (
+              <option key={f.hours} value={f.hours}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-[var(--fw-text-muted)]">
+          Horário (servidor)
+          <input type="time" value={cfg?.timeOfDay ?? '06:00'} onChange={(e) => e.target.value && void save({ timeOfDay: e.target.value })} className="px-2 py-1.5 border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] text-[var(--fw-text-body)]" />
+        </label>
+        <label className="flex flex-col gap-1 text-[var(--fw-text-muted)]">
+          Guardar os últimos
+          <input type="number" min={1} max={200} value={cfg?.keep ?? 30} onChange={(e) => e.target.value && void save({ keep: Number(e.target.value) })} className="w-20 px-2 py-1.5 border border-[var(--fw-border-strong)] rounded-md bg-[var(--fw-bg-input)] text-[var(--fw-text-body)]" />
+        </label>
+        <button type="button" onClick={() => void runNow()} disabled={busy || state?.running} className={btn}>
+          {state?.running ? <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" /> : <CalendarClock className="w-3.5 h-3.5" aria-hidden="true" />}
+          {state?.running ? 'Gerando…' : 'Gerar agora'}
+        </button>
+        <p className="text-[var(--fw-text-muted)] tabular-nums pb-1.5">
+          {cfg?.enabled ? `Próxima geração: ${whenBr(cfg.nextRunAt)}` : 'Agendamento desligado'}
+          {cfg?.lastRunAt ? ` · última: ${whenBr(cfg.lastRunAt)}` : ''}
+        </p>
+      </div>
+      {cfg?.lastError && (
+        <p className="text-xs text-red-700" role="alert">
+          Última tentativa falhou: {cfg.lastError}
+        </p>
+      )}
+      {msg && (
+        <p className="text-xs text-[var(--fw-text-muted)]" role="status">
+          {msg}
+        </p>
+      )}
+
+      {state && state.files.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-[var(--fw-text-muted)]">
+                <th className="py-1.5 pr-3 font-medium">Gerado em</th>
+                <th className="py-1.5 pr-3 font-medium">Período</th>
+                <th className="py-1.5 pr-3 font-medium text-right">Conexões</th>
+                <th className="py-1.5 pr-3 font-medium text-right">Volume</th>
+                <th className="py-1.5 pr-3 font-medium">Origem</th>
+                <th className="py-1.5 pr-3 font-medium text-right">Tamanho</th>
+                <th className="py-1.5 font-medium text-right">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {state.files.map((f) => (
+                <tr key={f.id} className="border-t border-[var(--fw-border)]">
+                  <td className="py-1.5 pr-3 tabular-nums">{whenBr(f.createdAt)}</td>
+                  <td className="py-1.5 pr-3 tabular-nums text-[var(--fw-text-muted)]">
+                    {whenBr(f.periodStart)} → {whenBr(f.periodEnd)}
+                  </td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{n(f.connections)}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{formatBytes(f.totalBytes)}</td>
+                  <td className="py-1.5 pr-3 text-[var(--fw-text-muted)]">{f.trigger === 'scheduled' ? 'agendado' : 'manual'}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{formatBytes(f.sizeBytes)}</td>
+                  <td className="py-1.5 text-right whitespace-nowrap">
+                    <a href={vendorApiUrl(vendor, `/reports/files/${f.id}`)} className="inline-flex items-center gap-1 px-2 py-1 font-medium text-[var(--fw-accent)] hover:underline">
+                      <Download className="w-3.5 h-3.5" aria-hidden="true" /> Baixar
+                    </a>
+                    <a href={vendorApiUrl(vendor, `/reports/files/${f.id}?view=1`)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 px-2 py-1 font-medium text-[var(--fw-text-body)] hover:underline">
+                      <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" /> Abrir
+                    </a>
+                    <button type="button" onClick={() => void remove(f.id)} aria-label="Apagar relatório" className="inline-flex items-center px-2 py-1 text-[var(--fw-text-muted)] hover:text-red-700">
+                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="text-xs text-[var(--fw-text-muted)]">Nenhum relatório gerado ainda. Ative o agendamento ou clique em “Gerar agora”.</p>
+      )}
+    </section>
   );
 }
 
@@ -98,6 +267,7 @@ export function AccessReportView({ vendor, refreshToken }: AccessReportViewProps
 
   return (
     <div className="space-y-4">
+      <SchedulePanel vendor={vendor} />
       <div className="no-print bg-white border border-[var(--fw-border)] rounded-lg p-4 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-sm font-semibold text-[var(--fw-heading)]">Relatório de Acessos e Consumo</h2>

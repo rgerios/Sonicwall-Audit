@@ -87,3 +87,37 @@ export interface AccessReportData {
   /** Quanto os demais (fora do Top) representam. */
   othersSources: { count: number; totalBytes: number };
 }
+
+/** Agendamento do relatório de Acessos e Consumo (por localidade). */
+export interface ReportScheduleConfig {
+  enabled: boolean;
+  /** Intervalo em horas: 24, 72 ou 168. O período analisado é igual ao intervalo. */
+  everyHours: number;
+  /** Horário do dia (HH:MM, fuso do servidor) em que o relatório é gerado. */
+  timeOfDay: string;
+  /** Quantos relatórios guardar (os mais antigos são apagados). */
+  keep: number;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastError: string | null;
+}
+
+export interface ReportFileInfo {
+  id: string;
+  createdAt: string;
+  trigger: 'scheduled' | 'manual';
+  minutes: number;
+  periodStart: string | null;
+  periodEnd: string;
+  sizeBytes: number;
+  connections: number;
+  totalBytes: number;
+  sources: number;
+  filename: string;
+}
+
+export interface ReportScheduleState {
+  config: ReportScheduleConfig;
+  files: ReportFileInfo[];
+  running: boolean;
+}

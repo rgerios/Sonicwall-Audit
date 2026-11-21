@@ -1142,7 +1142,8 @@ export class PostgresStore {
   async aggregateAccess(
     siteId: string,
     sinceIso: string,
-    groupLimit = 60_000
+    groupLimit = 60_000,
+    timeoutOverrideMs?: number
   ): Promise<{
     groups: Array<{ src: string; dst: string; proto: string; port: string; app: string; blocked: boolean; c: number; up: number; down: number }>;
     hours: Array<{ t: string; c: number; blocked: number; up: number; down: number }>;
@@ -1150,7 +1151,7 @@ export class PostgresStore {
     timedOut: boolean;
   }> {
     const pool = this.getPool();
-    const timeoutMs = Math.max(5000, Number(process.env.REPORT_QUERY_TIMEOUT_MS) || 60_000);
+    const timeoutMs = Math.max(5000, timeoutOverrideMs ?? (Number(process.env.REPORT_QUERY_TIMEOUT_MS) || 60_000));
     const bytes = (key: string) => `COALESCE(NULLIF(payload_json->>'${key}', '')::numeric, 0)`;
     const base = `site_id = $1 AND event_at >= $2 AND action <> 'system'`;
     const client = await pool.connect();
