@@ -10,7 +10,16 @@ import {
   summarizeDestinations,
   type DestinationNode,
 } from '../shared/destinations.ts';
-import { buildDestinationNodes, filterEventsBySource, normalizeSourceFilter } from '../server/destinationsEngine.ts';
+import {
+  buildDestinationNodes,
+  buildSourceNodes,
+  eventMatchesDestination,
+  filterEventsByDestination,
+  filterEventsBySource,
+  normalizeDestinationFilter,
+  normalizeSourceFilter,
+} from '../server/destinationsEngine.ts';
+import { subnetGroup, summarizeSources } from '../shared/sources.ts';
 import { createReverseResolver } from '../server/rdns.ts';
 import { parseFortiGateSyslog } from '../server/fortigateParsers.ts';
 import { parseSonicWallSyslog } from '../server/parsers.ts';
@@ -195,5 +204,86 @@ describe('filtro por IP de origem e origens por destino', () => {
     assert.equal(normalizeSourceFilter(undefined), '');
     assert.equal(normalizeSourceFilter("10.0.0.5' OR 1=1"), null);
     assert.equal(normalizeSourceFilter('a'.repeat(60)), null);
+  });
+});
+
+describe('origens (quem consome) e filtro por destino', () => {
+  const log = (t: number, src: string, dst: string, extra: string, action = 'allow') =>
+    `<134>id=firewall sn=ABC time="2026-01-01 10:00:0${t}" fw=1.1.1.1 pri=6 c=1024 m=537 msg="x" src=${src}:1:X0 dst=${dst}:443:X1 proto=tcp/https sent=100 rcvd=900 fw_action="${action}"${extra}`;
+  const events = parseSonicWallSyslog(
+    [
+      log(1, '10.0.0.5', '52.96.1.1', ' dstname="outlook.office365.com"'),
+      log(2, '10.0.0.5', '52.96.1.1', ' dstname="outlook.office365.com"'),
+      log(3, '10.0.0.5', '142.250.1.1', ' dstname="www.google.com"', 'drop'),
+      log(4, '10.0.0.6', '142.250.1.1', ' dstname="www.google.com"'),
+      log(5, '10.0.1.9', '142.250.1.1', ' dstname="mail.google.com"'), // mesmo IP, outro domínio (CDN compartilhada)
+      log(6, '10.0.0.7', '203.0.113.9', ''),
+    ].join('\n'),
+    'upload'
+  );
+
+  it('agrega por origem: consumo, destinos distintos, categorias e bloqueios', () => {
+    const { nodes, analyzed } = buildSourceNodes(events);
+    assert.equal(analyzed, 6);
+    assert.equal(nodes[0].ip, '10.0.0.5');
+    assert.equal(nodes[0].connections, 3);
+    assert.equal(nodes[0].blocked, 1);
+    assert.equal(nodes[0].bytes, 3000);
+    assert.equal(nodes[0].destinations, 2);
+    assert.deepEqual(nodes[0].topDestinations[0], { label: 'outlook.office365.com', count: 2 });
+    assert.ok(nodes[0].categories.some((c) => c.name === 'Software e atualizações'));
+    assert.equal(nodes[0].group, '10.0.0.0/24');
+    assert.equal(nodes.find((n) => n.ip === '10.0.1.9')?.group, '10.0.1.0/24');
+    assert.equal(nodes.find((n) => n.ip === '10.0.0.7')?.topDestinations[0].label, '203.0.113.9');
+  });
+
+  it('sub-rede por IPv4 e IPv6', () => {
+    assert.equal(subnetGroup('192.168.10.45'), '192.168.10.0/24');
+    assert.equal(subnetGroup('2001:db8:1:2:aaaa::1'), '2001:db8:1:2::/64');
+    assert.equal(subnetGroup('não é ip'), null);
+  });
+
+  it('valida o filtro de destino', () => {
+    assert.deepEqual(normalizeDestinationFilter('Outlook.Office365.com', '52.96.1.1, 52.96.1.2'), {
+      text: 'outlook.office365.com',
+      ips: ['52.96.1.1', '52.96.1.2'],
+    });
+    assert.deepEqual(normalizeDestinationFilter('', ''), { text: '', ips: [] });
+    assert.equal(normalizeDestinationFilter("x' OR 1=1", ''), null);
+    assert.equal(normalizeDestinationFilter('', '1.2.3.4;drop'), null);
+    assert.equal(normalizeDestinationFilter('', Array.from({ length: 11 }, (_, i) => `1.1.1.${i}`).join(',')), null);
+  });
+
+  it('filtro por nome casa pelo nome (e não pelo IP compartilhado), com subdomínios por "contém"', () => {
+    const byHost = filterEventsByDestination(events, { text: 'www.google.com', ips: ['142.250.1.1'] });
+    assert.equal(byHost.length, 2, 'mail.google.com usa o mesmo IP mas é outro nome');
+    const byDomain = filterEventsByDestination(events, { text: 'google.com', ips: [] });
+    assert.equal(byDomain.length, 3);
+    // sem nome conhecido cai nos IPs exatos do destino clicado
+    assert.equal(filterEventsByDestination(events, { text: '203.0.113.9', ips: [] }).length, 1);
+    assert.equal(filterEventsByDestination(events, { text: '', ips: ['203.0.113.9'] }).length, 1);
+    assert.equal(filterEventsByDestination(events, { text: '', ips: [] }).length, events.length);
+  });
+
+  it('usa o nome do DNS reverso em cache quando o log não traz o nome', () => {
+    const noName = events[5];
+    assert.equal(eventMatchesDestination(noName, { text: 'example.net', ips: [] }), false);
+    assert.equal(eventMatchesDestination(noName, { text: 'example.net', ips: [] }, () => 'host.example.net'), true);
+  });
+
+  it('filtros combinados: origem e destino', () => {
+    const only = filterEventsByDestination(filterEventsBySource(events, '10.0.0.5'), { text: 'google.com', ips: [] });
+    assert.equal(only.length, 1);
+    assert.equal(buildSourceNodes(only).nodes[0].blocked, 1);
+  });
+
+  it('resume as maiores origens, categorias e fatos', () => {
+    const { nodes } = buildSourceNodes(events);
+    const s = summarizeSources(nodes, 'connections');
+    assert.equal(s.top[0].node.ip, '10.0.0.5');
+    assert.ok(Math.abs(s.top[0].share - 0.5) < 1e-9);
+    assert.ok(s.facts.some((f) => /maiores origens/.test(f)));
+    assert.ok(s.facts.some((f) => /bloqueadas/.test(f)));
+    assert.ok(s.categories.length > 0);
   });
 });

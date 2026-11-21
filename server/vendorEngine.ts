@@ -1,4 +1,13 @@
-import { buildDestinationsReport, filterEventsBySource, normalizeSourceFilter } from './destinationsEngine.ts';
+import {
+  buildDestinationsReport,
+  buildSourcesReport,
+  filterEventsByDestination,
+  filterEventsBySource,
+  hasDestinationFilter,
+  normalizeDestinationFilter,
+  normalizeSourceFilter,
+  type DestinationFilter,
+} from './destinationsEngine.ts';
 import { getSharedResolver } from './rdns.ts';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -1939,58 +1948,124 @@ export function createVendorEngine(options: VendorEngineOptions): VendorEngineIn
   /** Eventos máximos lidos do banco quando o radar é filtrado por IP de origem. */
   const DESTINATIONS_SOURCE_QUERY_LIMIT = 20_000;
 
-  // --- Radar de destinos -------------------------------------------------------
-  // Agrega os destinos (FQDN do log ou DNS reverso, senão IP) da janela recente em memória.
+  // --- Radar de destinos e origens ----------------------------------------------
+  // Agrega o tráfego por destino (FQDN do log ou DNS reverso, senão IP) e por IP de origem.
+  // Sem filtros usa a janela recente em memória; com filtro de origem/destino e PostgreSQL consulta
+  // o banco (limitado, com tempo máximo), para achar também o que já saiu da janela.
+
+  /** Eventos máximos lidos do banco quando o radar é filtrado por origem ou destino. */
+  const RADAR_DB_QUERY_LIMIT = 20_000;
+
+  type RadarFilters = { srcIp: string; dst: DestinationFilter };
+
+  function parseRadarFilters(req: express.Request, res: express.Response): RadarFilters | null {
+    const srcIp = normalizeSourceFilter(req.query.srcIp);
+    if (srcIp === null) {
+      res.status(400).json({ error: 'IP de origem inválido. Use só números, pontos e dois-pontos (ex.: 10.20.4.45).' });
+      return null;
+    }
+    const dst = normalizeDestinationFilter(req.query.dst, req.query.dstIps);
+    if (dst === null) {
+      res.status(400).json({ error: 'Filtro de destino inválido. Use um nome, domínio ou IP (até 10 IPs).' });
+      return null;
+    }
+    return { srcIp, dst };
+  }
+
+  async function loadRadarEvents(
+    site: FirewallSiteRecord,
+    minutes: number,
+    filters: RadarFilters,
+    lookupHost: (ip: string) => string | null | undefined
+  ): Promise<{ events: SyslogEvent[]; dataSource: 'memory' | 'database'; truncated: boolean }> {
+    const sinceIso = minutes > 0 ? new Date(Date.now() - minutes * 60 * 1000).toISOString() : undefined;
+    let events = sinceIso
+      ? site.syslogs.filter((ev) => !ev.ingestedAt || ev.ingestedAt >= sinceIso)
+      : site.syslogs;
+    let dataSource: 'memory' | 'database' = 'memory';
+    let truncated = false;
+    const filtered = filters.srcIp !== '' || hasDestinationFilter(filters.dst);
+    if (filtered && usePg) {
+      await flushPendingInserts();
+      // Termos que o banco usa para estreitar (índice de texto): a origem, senão os IPs do destino
+      // (ou o texto, se for parecido com IP). Só um nome sem IP não estreita: lê o período e filtra aqui.
+      const dstTerms = filters.dst.ips.length
+        ? filters.dst.ips
+        : /^[0-9a-f:.]+$/.test(filters.dst.text)
+          ? [filters.dst.text]
+          : [];
+      const terms = filters.srcIp ? [filters.srcIp] : dstTerms;
+      // Nome sem IP (digitado) e sem origem: nada estreita pelo indice de IP, entao busca o nome no
+      // texto de busca e no texto original do log, dentro do periodo escolhido
+      const nameOnly =
+        !filters.srcIp && filters.dst.ips.length === 0 && filters.dst.text !== '' && dstTerms.length === 0;
+      const rows = await pgStore.querySyslogsSince(
+        site.id,
+        sinceIso ?? new Date(0).toISOString(),
+        terms,
+        RADAR_DB_QUERY_LIMIT,
+        nameOnly ? { rawContains: filters.dst.text } : {}
+      );
+      truncated = rows.length >= RADAR_DB_QUERY_LIMIT;
+      events = rows;
+      dataSource = 'database';
+    }
+    events = filterEventsBySource(events, filters.srcIp);
+    events = filterEventsByDestination(events, filters.dst, lookupHost);
+    return { events, dataSource, truncated };
+  }
+
+  const radarMinutes = (req: express.Request): number => {
+    const raw = Number(req.query.minutes ?? 0);
+    return Number.isFinite(raw) && raw > 0 ? Math.min(43200, Math.floor(raw)) : 0;
+  };
+
   router.get(
     '/destinations',
     asyncRoute(async (req, res) => {
       const site = siteFor(req);
-      const minutesRaw = Number(req.query.minutes ?? 0);
-      const minutes = Number.isFinite(minutesRaw) && minutesRaw > 0 ? Math.min(43200, Math.floor(minutesRaw)) : 0;
-      const sinceIso = minutes > 0 ? new Date(Date.now() - minutes * 60 * 1000).toISOString() : undefined;
-      const srcIp = normalizeSourceFilter(req.query.srcIp);
-      if (srcIp === null) {
-        res.status(400).json({ error: 'IP de origem inválido. Use só números, pontos e dois-pontos (ex.: 10.20.4.45).' });
-        return;
-      }
-
-      let events = sinceIso
-        ? site.syslogs.filter((ev) => !ev.ingestedAt || ev.ingestedAt >= sinceIso)
-        : site.syslogs;
-      let dataSource: 'memory' | 'database' = 'memory';
-      let truncated = false;
-      if (srcIp) {
-        if (usePg) {
-          // Filtro por origem: a janela em memória pode não conter o histórico desse host, então
-          // consulta o banco (limitado e com tempo máximo, como a tela de Syslogs)
-          await flushPendingInserts();
-          const rows = await pgStore.querySyslogsSince(
-            site.id,
-            sinceIso ?? new Date(0).toISOString(),
-            srcIp,
-            DESTINATIONS_SOURCE_QUERY_LIMIT
-          );
-          truncated = rows.length >= DESTINATIONS_SOURCE_QUERY_LIMIT;
-          events = rows;
-          dataSource = 'database';
-        }
-        events = filterEventsBySource(events, srcIp);
-      }
+      const minutes = radarMinutes(req);
+      const filters = parseRadarFilters(req, res);
+      if (!filters) return;
       const resolver = getSharedResolver();
+      const lookupHost = (ip: string) => resolver.lookupCached(ip);
+      const { events, dataSource, truncated } = await loadRadarEvents(site, minutes, filters, lookupHost);
       const report = buildDestinationsReport({
         events,
         minutes,
         windowSize: site.syslogs.length,
-        lookupHost: (ip) => resolver.lookupCached(ip),
+        lookupHost,
         resolver: { enabled: resolver.enabled, ...resolver.stats() },
       });
-      report.srcIp = srcIp;
+      report.srcIp = filters.srcIp;
+      report.dst = filters.dst.text;
+      report.dstIps = filters.dst.ips;
       report.dataSource = dataSource;
       report.truncated = truncated;
       // Resolve em segundo plano os IPs públicos mais ativos que ainda não têm nome
       resolver.schedule(
         report.nodes.filter((n) => n.host === null && n.scope === 'public').slice(0, 40).map((n) => n.ip)
       );
+      res.json(report);
+    })
+  );
+
+  router.get(
+    '/sources',
+    asyncRoute(async (req, res) => {
+      const site = siteFor(req);
+      const minutes = radarMinutes(req);
+      const filters = parseRadarFilters(req, res);
+      if (!filters) return;
+      const resolver = getSharedResolver();
+      const lookupHost = (ip: string) => resolver.lookupCached(ip);
+      const { events, dataSource, truncated } = await loadRadarEvents(site, minutes, filters, lookupHost);
+      const report = buildSourcesReport({ events, minutes, windowSize: site.syslogs.length, lookupHost });
+      report.srcIp = filters.srcIp;
+      report.dst = filters.dst.text;
+      report.dstIps = filters.dst.ips;
+      report.dataSource = dataSource;
+      report.truncated = truncated;
       res.json(report);
     })
   );

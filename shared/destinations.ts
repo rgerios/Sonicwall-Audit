@@ -42,6 +42,9 @@ export interface DestinationsReport {
   omitted: { destinations: number; connections: number };
   /** Filtro por IP de origem aplicado (vazio = todo o tráfego). */
   srcIp?: string;
+  /** Filtro por destino (nome/domínio/IP) e os IPs exatos do destino clicado. */
+  dst?: string;
+  dstIps?: string[];
   /** De onde vieram os eventos: janela em memória ou consulta ao banco (filtro por origem). */
   dataSource?: 'memory' | 'database';
   /** true quando a consulta ao banco atingiu o limite de eventos e há mais dados que o exibido. */

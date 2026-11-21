@@ -96,7 +96,11 @@ export interface BubbleLayout {
   bounds: { minX: number; minY: number; maxX: number; maxY: number };
 }
 
-export function radiusFor(value: number, maxValue: number, minR = 15, maxR = 74): number {
+/** Raios mínimo e máximo das bolhas; a cor do mapa de calor segue a posição entre os dois. */
+export const MIN_RADIUS = 15;
+export const MAX_RADIUS = 74;
+
+export function radiusFor(value: number, maxValue: number, minR = MIN_RADIUS, maxR = MAX_RADIUS): number {
   if (maxValue <= 0) return minR;
   return minR + (maxR - minR) * Math.sqrt(Math.max(0, value) / maxValue);
 }

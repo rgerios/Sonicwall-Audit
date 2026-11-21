@@ -1,3 +1,4 @@
+import { extractDestinationHints } from '../shared/destinations.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Pool, type PoolClient } from 'pg';
@@ -72,7 +73,9 @@ export interface SyslogQuery {
 export type EventTimeResolver = (ev: SyslogEvent) => number;
 
 export function buildSyslogSearchText(ev: SyslogEvent): string {
-  return `${ev.firewallHost} ${ev.serialNumber} ${ev.srcIp} ${ev.dstIp} ${ev.dstPort ?? ''} ${ev.protocol} ${ev.ruleRef ?? ''} ${ev.natRuleRef ?? ''} ${ev.message} ${ev.srcZone} ${ev.dstZone}`.toLowerCase();
+  // O nome do destino (FQDN que o firewall registrou no log) também é pesquisável, com índice
+  const host = extractDestinationHints(ev.raw).host ?? '';
+  return `${ev.firewallHost} ${ev.serialNumber} ${ev.srcIp} ${ev.dstIp} ${ev.dstPort ?? ''} ${ev.protocol} ${ev.ruleRef ?? ''} ${ev.natRuleRef ?? ''} ${ev.message} ${ev.srcZone} ${ev.dstZone} ${host}`.toLowerCase();
 }
 
 export class PostgresStore {
@@ -1085,16 +1088,30 @@ export class PostgresStore {
   async querySyslogsSince(
     siteId: string,
     sinceIso: string,
-    ip?: string,
-    limit = 50_000
+    ip?: string | string[],
+    limit = 50_000,
+    options: { rawContains?: string } = {}
   ): Promise<SyslogEvent[]> {
     const pool = this.getPool();
     const where: string[] = ['site_id = $1', 'event_at >= $2'];
     const params: unknown[] = [siteId, sinceIso];
-    if (ip && ip.trim()) {
-      const escaped = ip.trim().toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
+    // Um ou varios termos (IPs): basta casar com qualquer um (OR de LIKE usa o indice trigram)
+    const terms = (Array.isArray(ip) ? ip : ip ? [ip] : []).map((t) => t.trim()).filter(Boolean).slice(0, 10);
+    if (terms.length > 0) {
+      const likes = terms.map((t) => {
+        const escaped = t.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
+        params.push(`%${escaped}%`);
+        return `search_text LIKE $${params.length}`;
+      });
+      where.push(likes.length === 1 ? likes[0] : `(${likes.join(' OR ')})`);
+    }
+    // Nome de destino sem IP: eventos novos tem o nome no texto de busca (indice); os antigos so no
+    // texto original do log. O periodo (event_at) limita a leitura e o tempo maximo protege o disco.
+    const rawNeedle = (options.rawContains ?? '').trim().toLowerCase();
+    if (rawNeedle) {
+      const escaped = rawNeedle.replace(/[\\%_]/g, (c) => `\\${c}`);
       params.push(`%${escaped}%`);
-      where.push(`search_text LIKE $${params.length}`);
+      where.push(`(search_text LIKE $${params.length} OR LOWER(payload_json->>'raw') LIKE $${params.length})`);
     }
     params.push(limit);
     const timeoutMs = Math.max(1000, Number(process.env.SYSLOG_SEARCH_TIMEOUT_MS) || 20_000);

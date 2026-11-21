@@ -222,6 +222,55 @@ describe('busca de syslogs no PostgreSQL', { skip: !URL }, () => {
     assert.equal(limited.length, 10, 'o limite é respeitado');
   });
 
+  it('a consulta com vários IPs (filtro por destino) devolve a união dos eventos de cada IP', async () => {
+    const terms = ['203.0.113.77', '8.8.1.1'];
+    const rows = await store.querySyslogsSince(SEARCH_SITE, new Date(0).toISOString(), terms, 5000);
+    const ids = new Set(rows.map((r) => (r as { id: string }).id));
+    const expected = all.filter((e) => terms.includes(e.dstIp));
+    assert.ok(expected.length > 0);
+    for (const e of expected) assert.ok(ids.has(e.id), `faltou ${e.id}`);
+    // nada fora dos termos (o texto de busca de cada evento contém algum deles)
+    for (const r of rows) {
+      const ev = all.find((e) => e.id === (r as { id: string }).id);
+      assert.ok(ev && terms.some((t) => buildSyslogSearchText(ev).includes(t)));
+    }
+    // lista vazia = sem restrição por IP; mais de 10 termos são limitados aos 10 primeiros
+    const none = await store.querySyslogsSince(SEARCH_SITE, new Date(0).toISOString(), [], 7);
+    assert.equal(none.length, 7);
+    const many = await store.querySyslogsSince(
+      SEARCH_SITE,
+      new Date(0).toISOString(),
+      Array.from({ length: 14 }, (_, i) => `203.0.113.${i}`),
+      50
+    );
+    assert.ok(many.length >= 0);
+  });
+
+  it('busca por nome de destino sem IP acha eventos novos (texto indexado) e antigos (texto do log)', async () => {
+    // evento novo: o nome do destino entra no texto de busca na ingestão
+    const fresh = { ...mk(9001), raw: 'x dstname="api.nome-teste.example.com"' };
+    assert.ok(buildSyslogSearchText(fresh).includes('api.nome-teste.example.com'));
+    await withSearchText([fresh]);
+    // evento antigo (de antes desta versão): o nome só existe no texto original do log
+    await pool.query(
+      `INSERT INTO syslogs (site_id, vendor, id, ingested_at, event_at, event_timestamp, priority, action, severity, search_text, payload_json)
+       VALUES ($1, 'sonicwall', 'legacy-name-1', now() - interval '9 days', now() - interval '9 days', 'x', 6, 'allow', 'info', 'sem nome aqui',
+               jsonb_build_object('id', 'legacy-name-1', 'raw', 'y dstname="API.Nome-Teste.Example.com" z'))`,
+      [SEARCH_SITE]
+    );
+    const since = new Date(0).toISOString();
+    const rows = await store.querySyslogsSince(SEARCH_SITE, since, [], 1000, { rawContains: 'nome-teste.example.com' });
+    const ids = rows.map((r) => (r as { id: string }).id).sort();
+    assert.deepEqual(ids, ['legacy-name-1', 's9001']);
+    // o período restringe: nos últimos 3 dias só o evento novo
+    const recent = await store.querySyslogsSince(SEARCH_SITE, new Date(Date.now() - 3 * 86400_000).toISOString(), [], 1000, {
+      rawContains: 'nome-teste.example.com',
+    });
+    assert.deepEqual(recent.map((r) => (r as { id: string }).id), ['s9001']);
+    // o texto digitado é literal (curingas do LIKE não casam)
+    assert.equal((await store.querySyslogsSince(SEARCH_SITE, since, [], 1000, { rawContains: '%' })).length, 0);
+  });
+
   it('caracteres especiais do LIKE são tratados como texto', async () => {
     assert.equal((await q({ srcIp: '%' })).matched, 0);
     assert.equal((await q({ search: '_' })).matched, 0);

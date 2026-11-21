@@ -502,3 +502,5 @@ export type {
   DestinationService,
   DestinationsReport,
 } from './destinations.ts';
+
+export type { SourceNode, SourcesReport } from './sources.ts';
