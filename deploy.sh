@@ -271,4 +271,4 @@ echo "  Atualizar depois:  ./deploy.sh --update"
 echo "  Ver logs:          ${DOCKER} compose logs -f"
 echo "  Backup do banco:   ${DOCKER} exec -t fwaudit-db pg_dump -U fwaudit fwaudit > backup-\$(date +%F).sql"
 echo
-warn "O painel usa HTTP sem criptografia: mantenha o acesso restrito à rede interna ou VPN."
+warn "O painel usa HTTPS com certificado local (CA própria): importe a CA nos navegadores dos administradores e mantenha o acesso restrito à rede interna ou VPN."
